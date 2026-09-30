@@ -104,11 +104,16 @@ macro_rules! define_priors {
 #[doc(hidden)]
 #[macro_export]
 macro_rules! __draw_value_ty {
-    (Real) => { f64 };
-    (Int) => { i64 };
+    (Real) => {
+        f64
+    };
+    (Int) => {
+        i64
+    };
     ($other:ident) => {
         ::core::compile_error!(::core::concat!(
-            "unknown parameter kind `", ::core::stringify!($other),
+            "unknown parameter kind `",
+            ::core::stringify!($other),
             "`; expected `Real` or `Int`"
         ))
     };
@@ -119,11 +124,16 @@ macro_rules! __draw_value_ty {
 #[doc(hidden)]
 #[macro_export]
 macro_rules! __draw_prior_ty {
-    (Real) => { $crate::RealPrior };
-    (Int) => { $crate::IntPrior };
+    (Real) => {
+        $crate::RealPrior
+    };
+    (Int) => {
+        $crate::IntPrior
+    };
     ($other:ident) => {
         ::core::compile_error!(::core::concat!(
-            "unknown parameter kind `", ::core::stringify!($other),
+            "unknown parameter kind `",
+            ::core::stringify!($other),
             "`; expected `Real` or `Int`"
         ))
     };
