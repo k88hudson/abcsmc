@@ -1,0 +1,32 @@
+# Run tasks with: plz [taskname]
+# Docs: https://plzplz.org/reference.html
+
+[tasks.lint]
+run_serial = [
+  "cargo clippy --all-targets --all-features -- -D warnings",
+  "cargo fmt --all --check",
+]
+fail_hook = { suggest_command = "plz fix" }
+git_hook = "pre-commit"
+
+[tasks.fix]
+run_serial = [
+  "cargo fmt --all",
+  "cargo clippy --all-targets --all-features --fix --allow-dirty --allow-staged",
+]
+
+# The renewal example's tests only run when targeted explicitly.
+[tasks.test]
+run_serial = [
+  "cargo test",
+  "cargo test --features serde",
+  "cargo test --example renewal",
+]
+git_hook = "pre-push"
+
+[tasks.check]
+run_serial = ["plz:lint", "plz:test"]
+
+# Runs the renewal example and writes examples/output/{particles,trajectories}.csv
+[tasks.renewal]
+run = "cargo run --release --example renewal"

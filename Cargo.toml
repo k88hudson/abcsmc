@@ -4,12 +4,6 @@ version = "0.1.0"
 edition = "2024"
 license = "MIT OR Apache-2.0"
 
-[lints.clippy]
-needless_range_loop = "allow"
-
-[lints.rust]
-mismatched_lifetime_syntaxes = "allow"
-
 [dependencies]
 rand = "0.10.3"
 rand_distr = "0.6.0"

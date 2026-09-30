@@ -76,9 +76,9 @@ fn multivariate_normal_samples_have_the_requested_covariance() {
         .collect();
     let mut sum = [[0.0; 2]; 2];
     for d in &draws {
-        for i in 0..2 {
-            for j in 0..2 {
-                sum[i][j] += d.real(i) * d.real(j);
+        for (i, row) in sum.iter_mut().enumerate() {
+            for (j, cell) in row.iter_mut().enumerate() {
+                *cell += d.real(i) * d.real(j);
             }
         }
     }
