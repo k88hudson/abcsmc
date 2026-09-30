@@ -438,7 +438,7 @@ impl<M: Model> RunObserver<M> for JsonlObserver {
     }
 }
 
-fn push_f64(out: &mut String, x: f64) {
+pub(crate) fn push_f64(out: &mut String, x: f64) {
     if x.is_finite() {
         out.push_str(&format!("{x:?}"));
     } else {
@@ -446,7 +446,7 @@ fn push_f64(out: &mut String, x: f64) {
     }
 }
 
-fn push_f64s(out: &mut String, xs: &[f64]) {
+pub(crate) fn push_f64s(out: &mut String, xs: &[f64]) {
     out.push('[');
     for (i, &x) in xs.iter().enumerate() {
         if i > 0 {
@@ -478,7 +478,7 @@ fn push_params(out: &mut String, params: &Params) {
     out.push(']');
 }
 
-fn push_str(out: &mut String, s: &str) {
+pub(crate) fn push_str(out: &mut String, s: &str) {
     out.push('"');
     for c in s.chars() {
         match c {

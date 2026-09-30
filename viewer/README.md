@@ -38,6 +38,7 @@ One JSON object per line, in this order. `JsonlObserver` in
 | `generation_completed` | `generation`, `stats` (`tolerance`, `accepted`, `attempts`, `acceptance_ratio`, `ess`, `perplexity`, `duration_seconds`), `particles` (`[{params, weight, distance, seed}]`), `trajectories` (`[{particle, values}]`, an even sample of at most 200)                       |
 | `generation_abandoned` | `generation`; the run stops here                                                                                                                                                                                                                                           |
 | `run_finished`         | `generations`                                                                                                                                                                                                                                                              |
+| `projection`           | `label`, `trajectories` (`[{weight, values}]`): posterior particles simulated under a scenario, appended after the run by `Projection::append_to`. A later line with the same label replaces the earlier one.                                                              |
 
 `params` are positional in prior-declaration order; integers are written as
 JSON integers. `seed` is a string because it is a `u64`. Trajectories and

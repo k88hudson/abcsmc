@@ -163,3 +163,23 @@ describe("progress batches", () => {
     expect(currentGeneration(s)!.live).toHaveLength(200_000);
   });
 });
+
+describe("projections", () => {
+  it("are kept after the run finishes and replaced by label", () => {
+    const s = emptyRun();
+    applyLine(s, started);
+    applyLine(s, JSON.stringify({ type: "run_finished", generations: 0 }));
+    const projection = (label: string, value: number) =>
+      JSON.stringify({
+        type: "projection",
+        label,
+        trajectories: [{ weight: 1, values: [value, null] }],
+      });
+    applyLine(s, projection("baseline", 1));
+    applyLine(s, projection("control", 2));
+    applyLine(s, projection("baseline", 3));
+    expect(s.status).toBe("finished");
+    expect(s.projections.map((p) => p.label)).toEqual(["baseline", "control"]);
+    expect(s.projections[0]!.trajectories[0]!.values).toEqual([3, null]);
+  });
+});

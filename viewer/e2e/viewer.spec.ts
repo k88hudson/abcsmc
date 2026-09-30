@@ -21,6 +21,8 @@ test("loads a finished run from a file and renders every generation", async ({
   await expect(page.getByTestId("live")).toHaveCount(0);
   await expect(page.getByTestId("trajectories")).toContainText("Gen 4");
   await expect(page.getByTestId("overlays").locator("svg")).toHaveCount(2);
+  await expect(page.getByTestId("projections")).toContainText("baseline");
+  await expect(page.getByTestId("projections")).toContainText("20 particles");
   await expect(page.getByTestId("cells").locator(".gen-cell")).toHaveCount(5);
 
   await page.locator(".gen-table tbody tr").nth(1).click();

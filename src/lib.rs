@@ -24,11 +24,37 @@ pub use particle::*;
 mod observer;
 pub use observer::*;
 mod platform;
+mod run_log;
+pub use run_log::*;
 
 /// One completed generation: its accepted particles and run statistics.
 pub struct Generation<M: Model> {
     pub particles: Vec<Particle<M>>,
     pub stats: GenerationStats,
+}
+
+impl<M: Model> Generation<M> {
+    /// `n` particles drawn with replacement in proportion to their weights:
+    /// an equally weighted sample of this generation's posterior.
+    pub fn resample(&self, n: usize, rng: &mut impl rand::Rng) -> Vec<&Particle<M>> {
+        let weights = self.particles.iter().map(|p| p.weight);
+        resample_indices(weights, n, rng)
+            .into_iter()
+            .map(|i| &self.particles[i])
+            .collect()
+    }
+}
+
+/// `n` indices drawn with replacement in proportion to `weights`.
+pub(crate) fn resample_indices(
+    weights: impl Iterator<Item = f64>,
+    n: usize,
+    rng: &mut impl rand::Rng,
+) -> Vec<usize> {
+    use rand_distr::{Distribution, weighted::WeightedIndex};
+    let sampler =
+        WeightedIndex::new(weights).expect("weights must be non-negative and not all zero");
+    (0..n).map(|_| sampler.sample(rng)).collect()
 }
 
 #[derive(Clone, Copy, Debug)]

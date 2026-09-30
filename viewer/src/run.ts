@@ -44,6 +44,19 @@ export interface Generation {
   liveAttempts: number;
 }
 
+export interface ProjectedTrajectory {
+  weight: number;
+  // Non-finite values are written as null.
+  values: (number | null)[];
+}
+
+// Posterior particles simulated under a scenario, appended to the log after
+// the run. A later projection with the same label replaces the earlier one.
+export interface Projection {
+  label: string;
+  trajectories: ProjectedTrajectory[];
+}
+
 export interface RunState {
   id: string | null;
   version: number | null;
@@ -53,6 +66,7 @@ export interface RunState {
   params: ParamMeta[];
   observed: number[] | null;
   generations: Generation[];
+  projections: Projection[];
   status: "empty" | "running" | "finished";
   lines: number;
   badLines: number;
@@ -85,7 +99,8 @@ export type RunEvent =
       trajectories: Trajectory[];
     }
   | { type: "generation_abandoned"; generation: number }
-  | { type: "run_finished"; generations: number };
+  | { type: "run_finished"; generations: number }
+  | { type: "projection"; label: string; trajectories: ProjectedTrajectory[] };
 
 export function emptyRun(): RunState {
   return {
@@ -97,6 +112,7 @@ export function emptyRun(): RunState {
     params: [],
     observed: null,
     generations: [],
+    projections: [],
     status: "empty",
     lines: 0,
     badLines: 0,
@@ -171,6 +187,18 @@ export function applyEvent(state: RunState, event: RunEvent): RunState {
     }
     case "run_finished": {
       state.status = "finished";
+      break;
+    }
+    case "projection": {
+      const projection = {
+        label: event.label,
+        trajectories: event.trajectories,
+      };
+      const existing = state.projections.findIndex(
+        (p) => p.label === event.label,
+      );
+      if (existing >= 0) state.projections[existing] = projection;
+      else state.projections.push(projection);
       break;
     }
   }

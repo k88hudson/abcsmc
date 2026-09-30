@@ -20,6 +20,7 @@ import {
   extent,
   generationColor,
   normalizedWeights,
+  quantileBands,
   weightedHistogram,
   weightedKde,
 } from "./stats";
@@ -186,6 +187,67 @@ const liveFraction = computed(() => {
   if (!g || run.nParticles === 0) return 0;
   return Math.min(1, g.liveAccepted / run.nParticles);
 });
+
+// Median and central 50% and 90% bands of each projection, with the observed
+// series on top so the fitted window and the projected part read together.
+const projectionCharts = computed(() =>
+  run.projections.map((projection) => {
+    const { x, bands } = quantileBands(
+      projection.trajectories,
+      [0.05, 0.25, 0.5, 0.75, 0.95],
+    );
+    const series: {
+      x: number[];
+      data: number[];
+      color: string;
+      strokeWidth: number;
+      dots: boolean;
+      legend: string;
+    }[] = [
+      {
+        x,
+        data: bands[2]!,
+        color: "#1d4ed8",
+        strokeWidth: 2,
+        dots: false,
+        legend: "Median",
+      },
+    ];
+    if (run.observed) {
+      series.push({
+        x: run.observed.map((_, i) => i),
+        data: run.observed,
+        color: "#14b8a6",
+        strokeWidth: 2.5,
+        dots: true,
+        legend: "Observed",
+      });
+    }
+    return {
+      label: projection.label,
+      count: projection.trajectories.length,
+      series,
+      areas: [
+        {
+          x,
+          lower: bands[0]!,
+          upper: bands[4]!,
+          color: "#2563eb",
+          opacity: 0.15,
+          legend: "90%",
+        },
+        {
+          x,
+          lower: bands[1]!,
+          upper: bands[3]!,
+          color: "#2563eb",
+          opacity: 0.3,
+          legend: "50%",
+        },
+      ],
+    };
+  }),
+);
 
 const trajectorySeries = computed(() => {
   const g = shownGeneration.value;
@@ -490,6 +552,34 @@ function fmt(x: number, digits = 3): string {
         />
       </section>
 
+      <section v-if="projectionCharts.length" data-testid="projections">
+        <h2>Projections</h2>
+        <p class="muted">
+          Posterior particles simulated forward. Line is the weighted median,
+          bands are the central 50% and 90%.
+        </p>
+        <div class="cells">
+          <div
+            v-for="chart in projectionCharts"
+            :key="chart.label"
+            class="projection"
+          >
+            <h4>
+              {{ chart.label }} <small>{{ chart.count }} particles</small>
+            </h4>
+            <LineChart
+              :series="chart.series"
+              :areas="chart.areas"
+              :height="280"
+              x-label="Index"
+              y-label="Value"
+              :menu="false"
+              tooltip-trigger="hover"
+            />
+          </div>
+        </div>
+      </section>
+
       <section v-if="completed.length" data-testid="overlays">
         <h2>Posterior across generations</h2>
         <p class="muted">Prior in grey, later generations darker.</p>
@@ -726,7 +816,8 @@ h4 small {
 .gen-cell.selected {
   border-color: #2563eb;
 }
-.gen-cell h4 {
+.gen-cell h4,
+.projection h4 {
   margin: 0 0 0.5rem;
 }
 .empty {

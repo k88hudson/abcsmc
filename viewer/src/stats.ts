@@ -128,3 +128,60 @@ export function generationColor(i: number, n: number): string {
   const t = n > 1 ? i / (n - 1) : 0;
   return `hsl(222, 75%, ${Math.round(70 - t * 52)}%)`;
 }
+
+// The values at cumulative weight fractions `qs` (each in [0, 1]), taking the
+// first value whose running weight reaches the fraction. Non-finite values
+// are skipped. Returns NaN for every fraction when nothing is left.
+export function weightedQuantiles(
+  values: (number | null)[],
+  weights: number[],
+  qs: number[],
+): number[] {
+  const pairs: [number, number][] = [];
+  let total = 0;
+  for (let i = 0; i < values.length; i++) {
+    const v = values[i];
+    const w = weights[i] ?? 0;
+    if (v === null || v === undefined || !Number.isFinite(v) || !(w > 0))
+      continue;
+    pairs.push([v, w]);
+    total += w;
+  }
+  if (pairs.length === 0) return qs.map(() => NaN);
+  pairs.sort((a, b) => a[0] - b[0]);
+  return qs.map((q) => {
+    const target = q * total;
+    let acc = 0;
+    for (const [v, w] of pairs) {
+      acc += w;
+      if (acc >= target) return v;
+    }
+    return pairs[pairs.length - 1]![0];
+  });
+}
+
+export interface QuantileBands {
+  x: number[];
+  // One series per requested fraction, in the order given.
+  bands: number[][];
+}
+
+// Weighted quantiles across trajectories at every index any of them reaches.
+export function quantileBands(
+  trajectories: { weight: number; values: (number | null)[] }[],
+  qs: number[],
+): QuantileBands {
+  let length = 0;
+  for (const t of trajectories) length = Math.max(length, t.values.length);
+  const weights = trajectories.map((t) => t.weight);
+  const bands: number[][] = qs.map(() => new Array<number>(length));
+  for (let i = 0; i < length; i++) {
+    const at = weightedQuantiles(
+      trajectories.map((t) => t.values[i] ?? null),
+      weights,
+      qs,
+    );
+    for (let k = 0; k < qs.length; k++) bands[k]![i] = at[k]!;
+  }
+  return { x: Array.from({ length }, (_, i) => i), bands };
+}
