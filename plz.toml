@@ -25,8 +25,40 @@ run_serial = [
 git_hook = "pre-push"
 
 [tasks.check]
-run_serial = ["plz:lint", "plz:test"]
+run_serial = ["plz:lint", "plz:test", "plz:ui:lint", "plz:ui:unit", "plz:ui:build"]
 
 # Runs the renewal example and writes examples/output/{particles,trajectories}.csv
 [tasks.renewal]
 run = "cargo run --release --example renewal"
+
+[taskgroup.ui.extends]
+env = "pnpm"
+dir = "viewer"
+
+[taskgroup.ui.setup]
+run = "pnpm install"
+
+# Vite dev server for the run viewer
+[taskgroup.ui.dev]
+depends = ["ui.setup"]
+run = "vite"
+
+[taskgroup.ui.build]
+depends = ["ui.setup"]
+run_serial = ["vue-tsc -b", "vite build"]
+
+[taskgroup.ui.unit]
+depends = ["ui.setup"]
+run = "vitest run"
+
+[taskgroup.ui.e2e]
+depends = ["ui.setup"]
+run = "playwright test"
+
+[taskgroup.ui.lint]
+depends = ["ui.setup"]
+run = "prettier --check ."
+
+[taskgroup.ui.format]
+depends = ["ui.setup"]
+run = "prettier --write ."
