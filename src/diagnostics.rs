@@ -225,7 +225,11 @@ pub fn trajectory_rows<M: Model>(
 ) -> Vec<TrajectoryRow> {
     let mut rows = Vec::new();
     for generation in generations {
-        let stride = (generation.particles.len() / max_per_generation).max(1);
+        let stride = generation
+            .particles
+            .len()
+            .div_ceil(max_per_generation.max(1))
+            .max(1);
         for (particle_number, particle) in generation
             .particles
             .iter()

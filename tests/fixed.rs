@@ -4,7 +4,8 @@
 use std::collections::HashSet;
 
 use abcsmc::{
-    Draw, Generation, IntPrior, Model, Params, Priors, RealPrior, define_priors, run, run_quantiles,
+    Draw, Generation, IntPrior, JsonlObserver, Model, Params, Priors, RealPrior, Silent,
+    define_priors, run, run_quantiles, run_quantiles_with, run_with,
 };
 use rand::{Rng, SeedableRng, rngs::StdRng};
 
@@ -243,4 +244,146 @@ fn macro_generated_draw_maps_priors_to_named_fields() {
         (mean_k - 3.0).abs() < 0.5,
         "k should approach 3, got {mean_k}"
     );
+}
+
+/// `NoisyModel` that also exposes an observed series and trajectories.
+struct TracedModel;
+
+impl Model for TracedModel {
+    type Draw = Params;
+    type Output = f64;
+
+    fn priors(&self) -> Priors {
+        NoisyModel.priors()
+    }
+
+    fn simulate(&self, params: &Params, seed: u64) -> f64 {
+        NoisyModel.simulate(params, seed)
+    }
+
+    fn distance(&self, output: &f64) -> f64 {
+        NoisyModel.distance(output)
+    }
+
+    fn observed(&self) -> Option<Vec<f64>> {
+        Some(vec![5.0, 5.0])
+    }
+
+    fn trajectory(&self, output: &f64) -> Option<Vec<f64>> {
+        Some(vec![*output, *output])
+    }
+}
+
+#[test]
+fn observers_do_not_change_the_result() {
+    let silent = run_with(&NoisyModel, &TOLERANCES, N, &Silent);
+    let printed = run(&NoisyModel, &TOLERANCES, N);
+    for (a, b) in silent.iter().zip(&printed) {
+        assert_eq!(a.stats.attempts, b.stats.attempts);
+        for (p, q) in a.particles.iter().zip(&b.particles) {
+            assert_eq!(p.params.real(0), q.params.real(0));
+            assert_eq!(p.weight, q.weight);
+        }
+    }
+}
+
+#[test]
+fn jsonl_log_records_the_whole_run() {
+    let dir = std::env::temp_dir().join(format!("abcsmc-jsonl-{}", std::process::id()));
+    let log = JsonlObserver::create(&dir, "test")
+        .unwrap()
+        .max_trajectories(10);
+    let path = log.path().to_path_buf();
+    let generations = run_quantiles_with(&TracedModel, &QUANTILES, N, &log);
+    drop(log);
+
+    let text = std::fs::read_to_string(&path).unwrap();
+    std::fs::remove_dir_all(&dir).unwrap();
+    let events: Vec<serde_json::Value> = text
+        .lines()
+        .map(|line| serde_json::from_str(line).unwrap())
+        .collect();
+    let of_type =
+        |t: &str| -> Vec<&serde_json::Value> { events.iter().filter(|e| e["type"] == t).collect() };
+
+    let started = of_type("run_started");
+    assert_eq!(started.len(), 1);
+    assert_eq!(started[0]["id"], "test");
+    assert_eq!(started[0]["n_particles"], N);
+    assert_eq!(started[0]["n_generations"], QUANTILES.len() + 1);
+    assert_eq!(
+        started[0]["quantiles"].as_array().unwrap().len(),
+        QUANTILES.len()
+    );
+    assert_eq!(started[0]["params"][0]["name"], "param_0");
+    assert_eq!(started[0]["params"][0]["kind"], "real");
+    assert_eq!(started[0]["observed"], serde_json::json!([5.0, 5.0]));
+
+    let gen_started = of_type("generation_started");
+    assert_eq!(gen_started.len(), generations.len());
+    assert!(
+        gen_started[0]["tolerance"].is_null(),
+        "infinite tolerance is null"
+    );
+    assert!(gen_started[1]["tolerance"].is_number());
+
+    let completed = of_type("generation_completed");
+    assert_eq!(completed.len(), generations.len());
+    for (event, generation) in completed.iter().zip(&generations) {
+        assert_eq!(event["generation"], generation.stats.generation);
+        assert_eq!(event["stats"]["attempts"], generation.stats.attempts);
+        let particles = event["particles"].as_array().unwrap();
+        assert_eq!(particles.len(), N);
+        assert_eq!(
+            particles[0]["params"][0],
+            generation.particles[0].params.real(0)
+        );
+        assert_eq!(
+            particles[0]["seed"],
+            generation.particles[0].seed.to_string()
+        );
+        let trajectories = event["trajectories"].as_array().unwrap();
+        assert_eq!(trajectories.len(), 10);
+        assert_eq!(trajectories[1]["particle"], N / 10);
+        assert_eq!(trajectories[9]["particle"], 9 * N / 10);
+        assert_eq!(trajectories[0]["values"].as_array().unwrap().len(), 2);
+    }
+
+    let progress = of_type("progress");
+    assert!(!progress.is_empty());
+    let batched: usize = progress
+        .iter()
+        .filter(|e| e["generation"] == 0)
+        .map(|e| e["batch"].as_array().unwrap().len())
+        .sum();
+    assert_eq!(
+        batched, N,
+        "every accepted particle is batched exactly once"
+    );
+    assert_eq!(progress.last().unwrap()["accepted"], N);
+    for generation in 0..generations.len() {
+        let last_of_generation = events
+            .iter()
+            .rposition(|e| e["generation"] == generation && e["type"] == "progress")
+            .expect("each generation writes progress");
+        assert_eq!(
+            events[last_of_generation + 1]["type"],
+            "generation_completed",
+            "the pending batch is flushed right before the generation completes"
+        );
+    }
+
+    assert_eq!(events.last().unwrap()["type"], "run_finished");
+    assert_eq!(events.last().unwrap()["generations"], generations.len());
+}
+
+#[test]
+fn trajectory_sample_spans_a_population_not_divisible_by_the_cap() {
+    use abcsmc::diagnostics::trajectory_rows;
+    let generations = run_with(&TracedModel, &TOLERANCES[..1], 399, &Silent);
+    let rows = trajectory_rows(&generations, 200, |output| vec![*output]);
+    let particles: Vec<usize> = rows.iter().map(|r| r.particle).collect();
+    assert_eq!(particles.len(), 200);
+    assert_eq!(particles[0], 0);
+    assert_eq!(particles[199], 398);
 }

@@ -5,7 +5,10 @@
 
 use std::path::Path;
 
-use abcsmc::{IntPrior, Model, Priors, RealPrior, define_priors, run_quantiles};
+use abcsmc::{
+    IntPrior, JsonlObserver, Model, Priors, RealPrior, StdoutObserver, define_priors,
+    run_quantiles_with,
+};
 use rand::{SeedableRng, rngs::StdRng};
 use serde::Serialize;
 
@@ -56,6 +59,20 @@ impl Model for RenewalFit {
         let observed: u64 = self.observed.iter().sum();
         u64::abs_diff(simulated, observed) as f64
     }
+
+    fn observed(&self) -> Option<Vec<f64>> {
+        Some(self.observed.iter().map(|&x| x as f64).collect())
+    }
+
+    fn trajectory(&self, output: &RenewalOutput) -> Option<Vec<f64>> {
+        Some(
+            output
+                .symptomatic_incidence
+                .iter()
+                .map(|&x| x as f64)
+                .collect(),
+        )
+    }
 }
 
 #[derive(Serialize)]
@@ -98,7 +115,15 @@ pub fn fit() {
     let model = RenewalFit {
         observed: incidence.into_iter().take(7 * 6).collect(),
     };
-    let generations = run_quantiles(&model, &[0.1, 0.05, 0.01, 0.005], 2_000);
+    let output_dir = crate_path.join("examples/output");
+    let log = JsonlObserver::timestamped(output_dir.join("runs")).unwrap();
+    println!("Writing {}", log.path().display());
+    let generations = run_quantiles_with(
+        &model,
+        &[0.1, 0.05, 0.01, 0.005],
+        2_000,
+        &(StdoutObserver::new(), log),
+    );
 
     let mut particle_rows = Vec::new();
     let mut trajectory_rows = Vec::new();
@@ -126,7 +151,6 @@ pub fn fit() {
         }
     }
 
-    let output_dir = crate_path.join("examples/output");
     write_csv(&particle_rows, &output_dir.join("particles.csv"));
     write_csv(&trajectory_rows, &output_dir.join("trajectories.csv"));
 }

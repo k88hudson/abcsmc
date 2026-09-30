@@ -41,4 +41,16 @@ pub trait Model {
     fn rng_seed(&self) -> u64 {
         8675309
     }
+
+    /// The observed series the model fits, for viewers to draw under
+    /// simulated trajectories. Not used by the engine.
+    fn observed(&self) -> Option<Vec<f64>> {
+        None
+    }
+
+    /// An output's series on the same axis as [`Model::observed`], for viewers.
+    /// Not used by the engine.
+    fn trajectory(&self, _output: &Self::Output) -> Option<Vec<f64>> {
+        None
+    }
 }

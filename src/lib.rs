@@ -1,4 +1,3 @@
-use indicatif::ProgressBar;
 use rand::{SeedableRng, rngs::StdRng};
 
 pub mod diagnostics;
@@ -22,6 +21,8 @@ mod step;
 pub use step::*;
 mod particle;
 pub use particle::*;
+mod observer;
+pub use observer::*;
 
 /// One completed generation: its accepted particles and run statistics.
 pub struct Generation<M: Model> {
@@ -52,17 +53,19 @@ fn run_generation<M>(
     n_particles: usize,
     previous: Option<(&[Particle<M>], &dyn PerturbationKernel)>,
     rng: &mut StdRng,
+    observer: &impl RunObserver<M>,
 ) -> Option<Generation<M>>
 where
     M: Model + Sync,
     M::Output: Send + Sync,
 {
-    println!("Generation {generation}, tolerance {tolerance}");
+    observer.generation_started(generation, tolerance);
     let started = std::time::Instant::now();
-    let progress_bar = ProgressBar::new(n_particles as u64);
-    let progress = || progress_bar.inc(1);
+    let on_accept = |params: &Params, distance: f64, attempts: u64| {
+        observer.particle_accepted(generation, params, distance, attempts)
+    };
     let output = match previous {
-        None => initialize(model, tolerance, n_particles, rng, progress),
+        None => initialize(model, tolerance, n_particles, rng, on_accept),
         Some((previous, kernel)) => step(
             model,
             tolerance,
@@ -70,14 +73,11 @@ where
             previous,
             kernel,
             rng,
-            progress,
+            on_accept,
         ),
     };
-    progress_bar.finish();
     if !output.complete {
-        println!(
-            "Generation {generation} could not be filled within max_attempts_per_proposal; stopping."
-        );
+        observer.generation_abandoned(generation);
         return None;
     }
     let stats = GenerationStats {
@@ -90,14 +90,12 @@ where
         perplexity: get_perplexity(&output),
         duration_seconds: started.elapsed().as_secs_f64(),
     };
-    println!(
-        "Acceptance ratio: {:.3}, ESS: {:.1}, Perplexity: {:.1}, Duration: {:.1}s",
-        stats.acceptance_ratio, stats.ess, stats.perplexity, stats.duration_seconds
-    );
-    Some(Generation {
+    let completed = Generation {
         particles: output.particles,
         stats,
-    })
+    };
+    observer.generation_completed(model, &completed);
+    Some(completed)
 }
 
 /// Continue an ABC-SMC run through `tolerances`, one generation per tolerance,
@@ -110,12 +108,12 @@ fn run_from<M>(
     n_particles: usize,
     mut generations: Vec<Generation<M>>,
     rng: &mut StdRng,
+    observer: &impl RunObserver<M>,
 ) -> Vec<Generation<M>>
 where
     M: Model + Sync,
     M::Output: Send + Sync,
 {
-    let started = std::time::Instant::now();
     let mut kernel = model.perturbation_kernel();
     let adapter = model.variance_adapter();
     if let Some(last) = generations.last() {
@@ -126,7 +124,15 @@ where
         let previous = generations
             .last()
             .map(|g| (g.particles.as_slice(), kernel.as_ref()));
-        match run_generation(model, generation, tolerance, n_particles, previous, rng) {
+        match run_generation(
+            model,
+            generation,
+            tolerance,
+            n_particles,
+            previous,
+            rng,
+            observer,
+        ) {
             Some(completed) => {
                 adapter.adapt(&params_of(&completed), kernel.as_mut());
                 generations.push(completed);
@@ -134,12 +140,7 @@ where
             None => break,
         }
     }
-    let attempts: u64 = generations.iter().map(|g| g.stats.attempts).sum();
-    println!(
-        "Calibration: {} generations, {attempts} simulations, {:.1}s",
-        generations.len(),
-        started.elapsed().as_secs_f64()
-    );
+    observer.run_finished(model, &generations);
     generations
 }
 
@@ -153,13 +154,38 @@ fn params_of<M: Model>(generation: &Generation<M>) -> Vec<Params> {
 
 /// Run ABC-SMC with one generation per tolerance: generation 0 is rejection sampling from the prior at `tolerances[0]`, and
 /// each later generation resamples, perturbs, and reweights the previous one.
+/// Progress is printed to stdout; see [`run_with`] to observe the run.
 pub fn run<M>(model: &M, tolerances: &[f64], n_particles: usize) -> Vec<Generation<M>>
 where
     M: Model + Sync,
     M::Output: Send + Sync,
 {
+    run_with(model, tolerances, n_particles, &StdoutObserver::new())
+}
+
+/// [`run`] reporting to `observer` instead of stdout. Pair observers with a
+/// tuple: `&(StdoutObserver::new(), JsonlObserver::create(dir, id)?)`.
+pub fn run_with<M>(
+    model: &M,
+    tolerances: &[f64],
+    n_particles: usize,
+    observer: &impl RunObserver<M>,
+) -> Vec<Generation<M>>
+where
+    M: Model + Sync,
+    M::Output: Send + Sync,
+{
     let mut rng = StdRng::seed_from_u64(model.rng_seed());
-    run_from(model, tolerances, n_particles, Vec::new(), &mut rng)
+    let meta = RunMeta::new(model, n_particles, tolerances.len(), None);
+    observer.run_started(model, &meta);
+    run_from(
+        model,
+        tolerances,
+        n_particles,
+        Vec::new(),
+        &mut rng,
+        observer,
+    )
 }
 
 /// Like [`run`], but with tolerances given as quantiles of the prior's distance
@@ -171,8 +197,33 @@ where
     M: Model + Sync,
     M::Output: Send + Sync,
 {
+    run_quantiles_with(model, quantiles, n_particles, &StdoutObserver::new())
+}
+
+/// [`run_quantiles`] reporting to `observer` instead of stdout.
+pub fn run_quantiles_with<M>(
+    model: &M,
+    quantiles: &[f64],
+    n_particles: usize,
+    observer: &impl RunObserver<M>,
+) -> Vec<Generation<M>>
+where
+    M: Model + Sync,
+    M::Output: Send + Sync,
+{
     let mut rng = StdRng::seed_from_u64(model.rng_seed());
-    let Some(prior) = run_generation(model, 0, f64::INFINITY, n_particles, None, &mut rng) else {
+    let meta = RunMeta::new(model, n_particles, quantiles.len() + 1, Some(quantiles));
+    observer.run_started(model, &meta);
+    let Some(prior) = run_generation(
+        model,
+        0,
+        f64::INFINITY,
+        n_particles,
+        None,
+        &mut rng,
+        observer,
+    ) else {
+        observer.run_finished(model, &[]);
         return Vec::new();
     };
     let mut distances: Vec<f64> = prior.particles.iter().map(|p| p.distance).collect();
@@ -181,7 +232,14 @@ where
         .iter()
         .map(|&q| quantile_threshold(&distances, q))
         .collect();
-    run_from(model, &tolerances, n_particles, vec![prior], &mut rng)
+    run_from(
+        model,
+        &tolerances,
+        n_particles,
+        vec![prior],
+        &mut rng,
+        observer,
+    )
 }
 
 /// The `q * n`th smallest of an ascending-sorted sample (truncating, so the

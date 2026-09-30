@@ -1,4 +1,4 @@
-use crate::{Draw, Model, Particle, PerturbationKernel, Priors};
+use crate::{Draw, Model, Params, Particle, PerturbationKernel, Priors};
 use core::f64;
 use rand::{Rng, SeedableRng, rngs::StdRng};
 use rand_distr::{Distribution, weighted::WeightedIndex};
@@ -34,7 +34,7 @@ pub fn initialize<M>(
     error_threshold: f64,
     n_particles: usize,
     rng: &mut impl Rng,
-    progress: impl Fn() + Sync,
+    on_accept: impl Fn(&Params, f64, u64) + Sync,
 ) -> StepOutput<M>
 where
     M: Model + Sync,
@@ -55,7 +55,7 @@ where
                 let output = model.simulate(&M::Draw::from_values(params.values()), sim_seed);
                 let distance = model.distance(&output);
                 if distance <= error_threshold {
-                    progress();
+                    on_accept(&params, distance, n_attempts);
                     return (
                         Some(Particle {
                             params,
@@ -98,7 +98,7 @@ pub fn step<M>(
     previous_particles: &[Particle<M>],
     kernel: &dyn PerturbationKernel,
     rng: &mut impl Rng,
-    progress: impl Fn() + Sync,
+    on_accept: impl Fn(&Params, f64, u64) + Sync,
 ) -> StepOutput<M>
 where
     M: Model + Sync,
@@ -143,7 +143,7 @@ where
                         0.0
                     };
 
-                    progress();
+                    on_accept(&proposed, distance, n_attempts);
                     return (
                         Some(Particle {
                             params: proposed,
