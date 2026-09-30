@@ -18,7 +18,7 @@ jobs:
     steps:
       - uses: actions/checkout@v7
       - uses: k88hudson/setup-plz@v1
-      - run: rustup update stable && rustup component add rustfmt clippy
+      - run: rustup update stable && rustup component add rustfmt clippy && rustup target add wasm32-unknown-unknown
       - run: corepack enable
       - uses: actions/setup-node@v7
         with:

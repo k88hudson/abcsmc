@@ -23,6 +23,7 @@ mod particle;
 pub use particle::*;
 mod observer;
 pub use observer::*;
+mod platform;
 
 /// One completed generation: its accepted particles and run statistics.
 pub struct Generation<M: Model> {
@@ -60,7 +61,7 @@ where
     M::Output: Send + Sync,
 {
     observer.generation_started(generation, tolerance);
-    let started = std::time::Instant::now();
+    let started = platform::Instant::now();
     let on_accept = |params: &Params, distance: f64, attempts: u64| {
         observer.particle_accepted(generation, params, distance, attempts)
     };

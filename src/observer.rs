@@ -7,10 +7,9 @@ use std::fs::{self, File};
 use std::io::{self, BufWriter, Write};
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
-use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+use std::time::Duration;
 
-use indicatif::ProgressBar;
-
+use crate::platform::{Bar, Instant};
 use crate::{Draw, Generation, Model, Params, Value};
 
 /// What a run declares before its first generation.
@@ -120,7 +119,7 @@ impl<M: Model> RunObserver<M> for Silent {}
 /// each one.
 #[derive(Default)]
 pub struct StdoutObserver {
-    bar: Mutex<Option<ProgressBar>>,
+    bar: Bar,
     started: Mutex<Option<Instant>>,
 }
 
@@ -133,14 +132,12 @@ impl StdoutObserver {
 impl<M: Model> RunObserver<M> for StdoutObserver {
     fn run_started(&self, _model: &M, meta: &RunMeta) {
         *self.started.lock().unwrap() = Some(Instant::now());
-        *self.bar.lock().unwrap() = Some(ProgressBar::new(meta.n_particles as u64));
+        self.bar.start(meta.n_particles as u64);
     }
 
     fn generation_started(&self, generation: usize, tolerance: f64) {
         println!("Generation {generation}, tolerance {tolerance}");
-        if let Some(bar) = self.bar.lock().unwrap().as_ref() {
-            bar.reset();
-        }
+        self.bar.reset();
     }
 
     fn particle_accepted(
@@ -150,15 +147,11 @@ impl<M: Model> RunObserver<M> for StdoutObserver {
         _distance: f64,
         _attempts: u64,
     ) {
-        if let Some(bar) = self.bar.lock().unwrap().as_ref() {
-            bar.inc(1);
-        }
+        self.bar.inc();
     }
 
     fn generation_completed(&self, _model: &M, generation: &Generation<M>) {
-        if let Some(bar) = self.bar.lock().unwrap().as_ref() {
-            bar.finish();
-        }
+        self.bar.finish();
         let stats = &generation.stats;
         println!(
             "Acceptance ratio: {:.3}, ESS: {:.1}, Perplexity: {:.1}, Duration: {:.1}s",
@@ -167,9 +160,7 @@ impl<M: Model> RunObserver<M> for StdoutObserver {
     }
 
     fn generation_abandoned(&self, generation: usize) {
-        if let Some(bar) = self.bar.lock().unwrap().as_ref() {
-            bar.abandon();
-        }
+        self.bar.abandon();
         println!(
             "Generation {generation} could not be filled within max_attempts_per_proposal; stopping."
         );
@@ -256,6 +247,7 @@ impl JsonlObserver {
 
     /// Like [`create`](Self::create) with a UTC timestamp (`YYYYMMDD-HHMMSS`)
     /// as the run id.
+    #[cfg(not(target_arch = "wasm32"))]
     pub fn timestamped(runs_dir: impl AsRef<Path>) -> io::Result<Self> {
         Self::create(runs_dir, &utc_timestamp())
     }
@@ -504,7 +496,9 @@ fn push_str(out: &mut String, s: &str) {
 
 /// `YYYYMMDD-HHMMSS` in UTC, from the proleptic Gregorian civil-from-days
 /// conversion.
+#[cfg(not(target_arch = "wasm32"))]
 fn utc_timestamp() -> String {
+    use std::time::{SystemTime, UNIX_EPOCH};
     let secs = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map(|d| d.as_secs())

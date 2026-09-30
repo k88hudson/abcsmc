@@ -24,8 +24,18 @@ run_serial = [
 ]
 git_hook = "pre-push"
 
+# Builds a calibration for wasm32-unknown-unknown and runs it under Node with
+# no host imports, so it fails on anything that needs a JavaScript host or
+# traps at runtime. Needs `rustup target add wasm32-unknown-unknown`.
+[tasks.wasm]
+run_serial = [
+  "cargo clippy --lib --target wasm32-unknown-unknown -- -D warnings",
+  "cargo build --release --example wasm_smoke --target wasm32-unknown-unknown",
+  "node tests/wasm_smoke.mjs target/wasm32-unknown-unknown/release/examples/wasm_smoke.wasm",
+]
+
 [tasks.check]
-run_serial = ["plz:lint", "plz:test", "plz:ui:lint", "plz:ui:unit", "plz:ui:build"]
+run_serial = ["plz:lint", "plz:test", "plz:wasm", "plz:ui:lint", "plz:ui:unit", "plz:ui:build"]
 
 # Runs the renewal example and writes examples/output/{particles,trajectories}.csv
 [tasks.renewal]
