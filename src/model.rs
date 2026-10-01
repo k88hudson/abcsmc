@@ -1,8 +1,9 @@
 use crate::{Draw, PerturbationKernel, Priors, VarianceAdapter, default_adapter, default_kernel};
 
-/// A model to be fit with ABC-SMC: it declares priors, simulates, and scores a
-/// distance. The engine derives sampling, prior density, and the perturbation
-/// kernel from the priors.
+/// A model to be fit with ABC-SMC: it declares priors and simulates. How a
+/// simulation is scored against data is a separate [`Distance`](crate::Distance)
+/// passed to the run. The engine derives sampling, prior density, and the
+/// perturbation kernel from the priors.
 pub trait Model {
     /// Calibrated parameters as a typed struct, usually from [`define_priors!`].
     /// `Params` reads them positionally instead.
@@ -19,10 +20,6 @@ pub trait Model {
     /// Simulate under `seed`. `(draw, seed)` fully determines the output, so a
     /// particle can be replayed from the seed retained on it.
     fn simulate(&self, draw: &Self::Draw, seed: u64) -> Self::Output;
-
-    /// Distance between a simulation and the observed data. Must not depend on
-    /// the generation.
-    fn distance(&self, output: &Self::Output) -> f64;
 
     fn perturbation_kernel(&self) -> Box<dyn PerturbationKernel> {
         default_kernel(&self.priors())
@@ -42,14 +39,10 @@ pub trait Model {
         8675309
     }
 
-    /// The observed series the model fits, for viewers to draw under
-    /// simulated trajectories. Not used by the engine.
-    fn observed(&self) -> Option<Vec<f64>> {
-        None
-    }
-
-    /// An output's series on the same axis as [`Model::observed`], for viewers.
-    /// Not used by the engine.
+    /// An output's series on the same axis as [`Distance::observed`], for
+    /// viewers. Not used by the engine.
+    ///
+    /// [`Distance::observed`]: crate::Distance::observed
     fn trajectory(&self, _output: &Self::Output) -> Option<Vec<f64>> {
         None
     }

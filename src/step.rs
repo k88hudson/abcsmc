@@ -1,4 +1,4 @@
-use crate::{Draw, Model, Params, Particle, PerturbationKernel, Priors};
+use crate::{Distance, Draw, Model, Params, Particle, PerturbationKernel, Priors};
 use core::f64;
 use rand::{Rng, SeedableRng, rngs::StdRng};
 use rand_distr::{Distribution, weighted::WeightedIndex};
@@ -31,6 +31,7 @@ pub struct StepOutput<M: Model> {
 /// results do not depend on the thread count.
 pub fn initialize<M>(
     model: &M,
+    distance: &(impl Distance<M::Output> + ?Sized),
     error_threshold: f64,
     n_particles: usize,
     rng: &mut impl Rng,
@@ -53,7 +54,7 @@ where
                 let params = priors.sample(&mut rng);
                 let sim_seed = rng.next_u64();
                 let output = model.simulate(&M::Draw::from_values(params.values()), sim_seed);
-                let distance = model.distance(&output);
+                let distance = distance.distance(&output);
                 if distance <= error_threshold {
                     on_accept(&params, distance, n_attempts);
                     return (
@@ -91,8 +92,10 @@ where
 /// Out-of-support proposals resample a new ancestor before perturbing again;
 /// re-perturbing the same ancestor would bias proposals near the support
 /// boundary.
+#[allow(clippy::too_many_arguments)]
 pub fn step<M>(
     model: &M,
+    distance: &(impl Distance<M::Output> + ?Sized),
     error_threshold: f64,
     n_particles: usize,
     previous_particles: &[Particle<M>],
@@ -128,7 +131,7 @@ where
 
                 let sim_seed = rng.next_u64();
                 let output = model.simulate(&M::Draw::from_values(proposed.values()), sim_seed);
-                let distance = model.distance(&output);
+                let distance = distance.distance(&output);
                 if distance <= error_threshold {
                     let proposal_weight: f64 = previous_particles
                         .iter()

@@ -4,10 +4,14 @@
 use std::collections::HashSet;
 
 use abcsmc::{
-    Draw, Generation, IntPrior, JsonlObserver, Model, Params, Priors, RealPrior, Silent,
-    define_priors, run, run_quantiles, run_quantiles_with, run_with,
+    Distance, Draw, Generation, IntPrior, JsonlObserver, Model, Params, Priors, RealPrior, Silent,
+    define_priors, distance_to, run, run_quantiles, run_quantiles_with, run_with,
 };
 use rand::{Rng, SeedableRng, rngs::StdRng};
+
+fn to_five(output: &f64) -> f64 {
+    (output - 5.0).abs()
+}
 
 /// Estimate `x` under `Uniform(0, 10)` with `simulate(x) = x`, targeting 5.
 struct ToyModel;
@@ -22,10 +26,6 @@ impl Model for ToyModel {
 
     fn simulate(&self, params: &Params, _seed: u64) -> f64 {
         params.real(0)
-    }
-
-    fn distance(&self, output: &f64) -> f64 {
-        (output - 5.0).abs()
     }
 }
 
@@ -44,10 +44,6 @@ impl Model for NoisyModel {
         let mut rng = StdRng::seed_from_u64(seed);
         let noise = (rng.next_u64() >> 11) as f64 / (1u64 << 53) as f64;
         params.real(0) + noise
-    }
-
-    fn distance(&self, output: &f64) -> f64 {
-        (output - 5.0).abs()
     }
 }
 
@@ -76,7 +72,7 @@ fn assert_tightens_and_converges<M: Model<Draw = Params>>(generations: &[Generat
 
 #[test]
 fn run_returns_one_generation_per_tolerance() {
-    let generations = run(&ToyModel, &TOLERANCES, N);
+    let generations = run(&ToyModel, &to_five, &TOLERANCES, N);
     assert_eq!(generations.len(), TOLERANCES.len());
     for (generation, tolerance) in generations.iter().zip(TOLERANCES) {
         assert_eq!(generation.particles.len(), N);
@@ -94,7 +90,7 @@ fn run_returns_one_generation_per_tolerance() {
 
 #[test]
 fn run_quantiles_returns_prior_plus_one_generation_per_quantile() {
-    let generations = run_quantiles(&ToyModel, &QUANTILES, N);
+    let generations = run_quantiles(&ToyModel, &to_five, &QUANTILES, N);
     assert_eq!(generations.len(), QUANTILES.len() + 1);
     assert!(generations.iter().all(|g| g.particles.len() == N));
     assert_eq!(generations[0].stats.tolerance, f64::INFINITY);
@@ -115,7 +111,7 @@ fn run_quantiles_returns_prior_plus_one_generation_per_quantile() {
 
 #[test]
 fn weights_are_normalized() {
-    for generation in run_quantiles(&ToyModel, &QUANTILES, N) {
+    for generation in run_quantiles(&ToyModel, &to_five, &QUANTILES, N) {
         let total: f64 = generation.particles.iter().map(|p| p.weight).sum();
         assert!((total - 1.0).abs() < 1e-9);
     }
@@ -124,9 +120,9 @@ fn weights_are_normalized() {
 #[test]
 fn stored_distance_matches_output() {
     let model = NoisyModel;
-    for generation in run_quantiles(&model, &QUANTILES, N) {
+    for generation in run_quantiles(&model, &to_five, &QUANTILES, N) {
         for particle in &generation.particles {
-            assert_eq!(particle.distance, model.distance(&particle.output));
+            assert_eq!(particle.distance, to_five(&particle.output));
         }
     }
 }
@@ -134,7 +130,7 @@ fn stored_distance_matches_output() {
 #[test]
 fn particle_seed_replays_its_simulation() {
     let model = NoisyModel;
-    let generations = run_quantiles(&model, &QUANTILES, N);
+    let generations = run_quantiles(&model, &to_five, &QUANTILES, N);
     for generation in &generations {
         for particle in &generation.particles {
             assert_eq!(
@@ -169,10 +165,6 @@ impl Model for UnreachableModel {
         params.real(0)
     }
 
-    fn distance(&self, output: &f64) -> f64 {
-        (output - 5.0).abs()
-    }
-
     fn max_attempts_per_proposal(&self) -> u64 {
         50
     }
@@ -180,7 +172,7 @@ impl Model for UnreachableModel {
 
 #[test]
 fn exhausted_attempts_stop_the_run_early() {
-    let generations = run(&UnreachableModel, &[5.0, 1.0, -1.0], 20);
+    let generations = run(&UnreachableModel, &to_five, &[5.0, 1.0, -1.0], 20);
     assert_eq!(generations.len(), 2);
 }
 
@@ -192,6 +184,10 @@ define_priors! {
 }
 
 struct MacroModel;
+
+fn macro_distance(output: &(f64, i64)) -> f64 {
+    (output.0 - 5.0).abs() + ((output.1 - 3).abs() as f64)
+}
 
 impl Model for MacroModel {
     type Draw = MacroDraw;
@@ -208,17 +204,13 @@ impl Model for MacroModel {
     fn simulate(&self, draw: &MacroDraw, _seed: u64) -> (f64, i64) {
         (draw.x, draw.k)
     }
-
-    fn distance(&self, output: &(f64, i64)) -> f64 {
-        (output.0 - 5.0).abs() + ((output.1 - 3).abs() as f64)
-    }
 }
 
 #[test]
 fn macro_generated_draw_maps_priors_to_named_fields() {
     assert_eq!(MacroDraw::NAMES, &["x", "k"]);
 
-    let generations = run_quantiles(&MacroModel, &QUANTILES, N);
+    let generations = run_quantiles(&MacroModel, &macro_distance, &QUANTILES, N);
     assert_eq!(generations.len(), QUANTILES.len() + 1);
     for generation in &generations {
         for particle in &generation.particles {
@@ -246,7 +238,7 @@ fn macro_generated_draw_maps_priors_to_named_fields() {
     );
 }
 
-/// `NoisyModel` that also exposes an observed series and trajectories.
+/// `NoisyModel` that also exposes trajectories.
 struct TracedModel;
 
 impl Model for TracedModel {
@@ -261,23 +253,29 @@ impl Model for TracedModel {
         NoisyModel.simulate(params, seed)
     }
 
-    fn distance(&self, output: &f64) -> f64 {
-        NoisyModel.distance(output)
-    }
-
-    fn observed(&self) -> Option<Vec<f64>> {
-        Some(vec![5.0, 5.0])
-    }
-
     fn trajectory(&self, output: &f64) -> Option<Vec<f64>> {
         Some(vec![*output, *output])
     }
 }
 
 #[test]
+fn a_distance_chosen_at_run_time_matches_the_same_distance_passed_directly() {
+    let boxed: Box<dyn Distance<f64>> = Box::new(to_five);
+    let chosen = run_with(&NoisyModel, boxed.as_ref(), &TOLERANCES, N, "", &Silent);
+    let direct = run_with(&NoisyModel, &to_five, &TOLERANCES, N, "", &Silent);
+    for (a, b) in chosen.iter().zip(&direct) {
+        assert_eq!(a.stats.attempts, b.stats.attempts);
+        for (p, q) in a.particles.iter().zip(&b.particles) {
+            assert_eq!(p.params.real(0), q.params.real(0));
+            assert_eq!(p.distance, q.distance);
+        }
+    }
+}
+
+#[test]
 fn observers_do_not_change_the_result() {
-    let silent = run_with(&NoisyModel, &TOLERANCES, N, &Silent);
-    let printed = run(&NoisyModel, &TOLERANCES, N);
+    let silent = run_with(&NoisyModel, &to_five, &TOLERANCES, N, "", &Silent);
+    let printed = run(&NoisyModel, &to_five, &TOLERANCES, N);
     for (a, b) in silent.iter().zip(&printed) {
         assert_eq!(a.stats.attempts, b.stats.attempts);
         for (p, q) in a.particles.iter().zip(&b.particles) {
@@ -294,7 +292,19 @@ fn jsonl_log_records_the_whole_run() {
         .unwrap()
         .max_trajectories(10);
     let path = log.path().to_path_buf();
-    let generations = run_quantiles_with(&TracedModel, &QUANTILES, N, &log);
+    let distance = distance_to(
+        "distance to 5",
+        &[5.0, 5.0],
+        |output: &f64, observed: &[f64]| (output - observed[0]).abs(),
+    );
+    let generations = run_quantiles_with(
+        &TracedModel,
+        &distance,
+        &QUANTILES,
+        N,
+        "a \"traced\" run",
+        &log,
+    );
     drop(log);
 
     let text = std::fs::read_to_string(&path).unwrap();
@@ -309,6 +319,8 @@ fn jsonl_log_records_the_whole_run() {
     let started = of_type("run_started");
     assert_eq!(started.len(), 1);
     assert_eq!(started[0]["id"], "test");
+    assert_eq!(started[0]["description"], "a \"traced\" run");
+    assert_eq!(started[0]["distance_description"], "distance to 5");
     assert_eq!(started[0]["n_particles"], N);
     assert_eq!(started[0]["n_generations"], QUANTILES.len() + 1);
     assert_eq!(
@@ -380,7 +392,7 @@ fn jsonl_log_records_the_whole_run() {
 #[test]
 fn trajectory_sample_spans_a_population_not_divisible_by_the_cap() {
     use abcsmc::diagnostics::trajectory_rows;
-    let generations = run_with(&TracedModel, &TOLERANCES[..1], 399, &Silent);
+    let generations = run_with(&TracedModel, &to_five, &TOLERANCES[..1], 399, "", &Silent);
     let rows = trajectory_rows(&generations, 200, |output| vec![*output]);
     let particles: Vec<usize> = rows.iter().map(|r| r.particle).collect();
     assert_eq!(particles.len(), 200);

@@ -10,18 +10,22 @@ use std::sync::Mutex;
 use std::time::Duration;
 
 use crate::platform::{Bar, Instant};
-use crate::{Draw, Generation, Model, Params, Value};
+use crate::{Distance, Draw, Generation, Model, Params, Value};
 
 /// What a run declares before its first generation.
 #[derive(Clone, Debug)]
 pub struct RunMeta {
+    /// What this run is, as given to the driver.
+    pub description: Option<String>,
+    /// What the run's distance measures, if it says.
+    pub distance_description: Option<String>,
     pub n_particles: usize,
     /// Generations the schedule asks for; the run may stop short.
     pub n_generations: usize,
     /// The quantile schedule, when tolerances come from the prior's distances.
     pub quantiles: Option<Vec<f64>>,
     pub params: Vec<ParamMeta>,
-    /// The observed series the model fits, if it exposes one.
+    /// The observed series the distance fits, if it exposes one.
     pub observed: Option<Vec<f64>>,
 }
 
@@ -34,6 +38,8 @@ pub struct ParamMeta {
 impl RunMeta {
     pub(crate) fn new<M: Model>(
         model: &M,
+        distance: &(impl Distance<M::Output> + ?Sized),
+        description: &str,
         n_particles: usize,
         n_generations: usize,
         quantiles: Option<&[f64]>,
@@ -49,11 +55,13 @@ impl RunMeta {
             })
             .collect();
         RunMeta {
+            description: (!description.is_empty()).then(|| description.to_string()),
+            distance_description: distance.description(),
             n_particles,
             n_generations,
             quantiles: quantiles.map(<[f64]>::to_vec),
             params,
-            observed: model.observed(),
+            observed: distance.observed(),
         }
     }
 }
@@ -131,6 +139,12 @@ impl StdoutObserver {
 
 impl<M: Model> RunObserver<M> for StdoutObserver {
     fn run_started(&self, _model: &M, meta: &RunMeta) {
+        if let Some(description) = &meta.description {
+            println!("{description}");
+        }
+        if let Some(distance) = &meta.distance_description {
+            println!("Distance: {distance}");
+        }
         *self.started.lock().unwrap() = Some(Instant::now());
         self.bar.start(meta.n_particles as u64);
     }
@@ -186,7 +200,8 @@ impl<M: Model> RunObserver<M> for StdoutObserver {
 ///
 /// Event `type`s, in order of appearance:
 ///
-/// - `run_started`: `version`, `id`, `n_particles`, `n_generations`,
+/// - `run_started`: `version`, `id`, `description` and
+///   `distance_description` (each a string or `null`), `n_particles`, `n_generations`,
 ///   `quantiles` (or `null`), `params` (`[{name, kind}]`, kind `real` or
 ///   `int`), `observed` (or `null`).
 /// - `generation_started`: `generation`, `tolerance` (`null` when infinite).
@@ -306,6 +321,10 @@ impl<M: Model> RunObserver<M> for JsonlObserver {
         let mut line = String::new();
         line.push_str(r#"{"type":"run_started","version":1,"id":"#);
         push_str(&mut line, &self.id);
+        line.push_str(r#","description":"#);
+        push_opt_str(&mut line, meta.description.as_deref());
+        line.push_str(r#","distance_description":"#);
+        push_opt_str(&mut line, meta.distance_description.as_deref());
         line.push_str(&format!(
             r#","n_particles":{},"n_generations":{},"quantiles":"#,
             meta.n_particles, meta.n_generations
@@ -460,6 +479,13 @@ pub(crate) fn push_f64s(out: &mut String, xs: &[f64]) {
 fn push_opt_f64s(out: &mut String, xs: Option<&[f64]>) {
     match xs {
         Some(xs) => push_f64s(out, xs),
+        None => out.push_str("null"),
+    }
+}
+
+fn push_opt_str(out: &mut String, s: Option<&str>) {
+    match s {
+        Some(s) => push_str(out, s),
         None => out.push_str("null"),
     }
 }

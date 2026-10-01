@@ -69,6 +69,10 @@ mod reader {
     #[derive(Clone, Debug)]
     pub struct RunLog {
         pub id: String,
+        /// The run's description, if it was given one.
+        pub description: Option<String>,
+        /// What the run's distance measures, if it said.
+        pub distance_description: Option<String>,
         pub n_particles: usize,
         pub params: Vec<ParamMeta>,
         pub observed: Option<Vec<f64>>,
@@ -149,6 +153,10 @@ mod reader {
     enum Event {
         RunStarted {
             id: String,
+            #[serde(default)]
+            description: Option<String>,
+            #[serde(default)]
+            distance_description: Option<String>,
             n_particles: usize,
             params: Vec<ParamSpec>,
             observed: Option<Vec<Option<f64>>>,
@@ -190,6 +198,8 @@ mod reader {
                 match event {
                     Event::RunStarted {
                         id,
+                        description,
+                        distance_description,
                         n_particles,
                         params,
                         observed,
@@ -210,6 +220,8 @@ mod reader {
                             .collect::<io::Result<Vec<_>>>()?;
                         log = Some(RunLog {
                             id,
+                            description,
+                            distance_description,
                             n_particles,
                             params,
                             observed: observed.map(|series| {

@@ -525,6 +525,10 @@ function fmt(x: number, digits = 3): string {
           <template v-if="run.id">
             <dt>Id</dt>
             <dd data-testid="run-id">{{ run.id }}</dd>
+            <dt v-if="run.distanceDescription">Distance</dt>
+            <dd v-if="run.distanceDescription" data-testid="distance">
+              {{ run.distanceDescription }}
+            </dd>
             <dt>Particles</dt>
             <dd>{{ run.nParticles }} per generation</dd>
             <dt>Generations</dt>
@@ -595,6 +599,9 @@ function fmt(x: number, digits = 3): string {
       @drop.prevent="onDrop"
     >
       <h1>abcsmc viewer</h1>
+      <p v-if="run.description" class="description" data-testid="description">
+        {{ run.description }}
+      </p>
       <Toggle v-model="logScale" label="Log scale" class="log-toggle" />
 
       <section v-if="!run.id" class="empty">
@@ -834,6 +841,10 @@ h4 small {
   color: var(--color-text-muted, #64748b);
   font-size: 0.8em;
   margin-left: 0.5em;
+}
+.description {
+  margin: 0 0 0.75rem;
+  max-width: 80ch;
 }
 .log-toggle {
   font-size: 0.85rem;

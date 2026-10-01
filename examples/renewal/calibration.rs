@@ -6,14 +6,23 @@
 use std::path::Path;
 
 use abcsmc::{
-    IntPrior, JsonlObserver, Model, Priors, RealPrior, StdoutObserver, define_priors,
-    run_quantiles_with,
+    Distance, Generation, IntPrior, JsonlObserver, Model, Particle, Priors, RealPrior,
+    StdoutObserver, define_priors, distance, run_quantiles_with,
 };
 use rand::{SeedableRng, rngs::StdRng};
 use serde::Serialize;
 
 use crate::projection;
 use crate::renewal::{Parameters, Population, RenewalModel, RenewalOutput, TransmissionChange};
+
+/// Fit the first weeks of the data; later observations are held out.
+const FITTED_WEEKS: usize = 6;
+const FITTED_DAYS: usize = 7 * FITTED_WEEKS;
+/// Which distance to fit with: change this to try another.
+const METRIC: Metric = Metric::DailyL1;
+const N_PARTICLES: usize = 2_000;
+/// Each generation's tolerance, as a quantile of the prior's distances.
+const QUANTILES: [f64; 4] = [0.1, 0.05, 0.01, 0.005];
 
 define_priors! {
     pub struct RenewalDraw / RenewalPriors {
@@ -26,7 +35,6 @@ define_priors! {
 /// model with a field changed.
 #[derive(Clone)]
 pub struct RenewalFit {
-    pub observed: Vec<u64>,
     pub transmission_change: Option<TransmissionChange>,
 }
 
@@ -55,30 +63,134 @@ impl Model for RenewalFit {
         RenewalModel::simulate(&parameters, &mut StdRng::seed_from_u64(seed))
     }
 
-    /// Absolute difference in total symptomatic incidence over the fitting window.
+    fn trajectory(&self, output: &RenewalOutput) -> Option<Vec<f64>> {
+        Some(as_f64s(&output.symptomatic_incidence))
+    }
+}
+
+fn as_f64s(counts: &[u64]) -> Vec<f64> {
+    counts.iter().map(|&x| x as f64).collect()
+}
+
+/// Ways to score simulated symptomatic incidence against the observed series.
+#[derive(Clone, Copy)]
+#[allow(dead_code)]
+enum Metric {
+    /// Day-by-day L1: follows the shape of the curve, noise included.
+    DailyL1,
+    /// L1 on weekly totals: follows the shape but smooths daily noise.
+    WeeklyL1,
+    /// Difference in total cases: outbreak size only, ignoring timing.
+    TotalCases,
+}
+
+/// The run's distance: one [`Metric`] over the fitted days.
+struct IncidenceDistance {
+    metric: Metric,
+    observed: Vec<u64>,
+}
+
+impl Distance<RenewalOutput> for IncidenceDistance {
     fn distance(&self, output: &RenewalOutput) -> f64 {
-        let simulated: u64 = output
-            .symptomatic_incidence
-            .iter()
-            .take(self.observed.len())
-            .sum();
-        let observed: u64 = self.observed.iter().sum();
-        u64::abs_diff(simulated, observed) as f64
+        let observed = &self.observed;
+        let simulated = &output.symptomatic_incidence[..observed.len()];
+        match self.metric {
+            Metric::DailyL1 => distance::l1(simulated, observed),
+            Metric::WeeklyL1 => distance::l1(&weekly(simulated), &weekly(observed)),
+            Metric::TotalCases => distance::total_difference(simulated, observed),
+        }
+    }
+
+    fn description(&self) -> Option<String> {
+        let metric = match self.metric {
+            Metric::DailyL1 => "L1 distance between daily symptomatic incidence",
+            Metric::WeeklyL1 => "L1 distance between weekly symptomatic incidence",
+            Metric::TotalCases => "Absolute difference in total symptomatic incidence",
+        };
+        Some(format!(
+            "{metric} over the first {} days",
+            self.observed.len()
+        ))
     }
 
     fn observed(&self) -> Option<Vec<f64>> {
-        Some(self.observed.iter().map(|&x| x as f64).collect())
+        Some(as_f64s(&self.observed))
     }
+}
 
-    fn trajectory(&self, output: &RenewalOutput) -> Option<Vec<f64>> {
-        Some(
-            output
-                .symptomatic_incidence
-                .iter()
-                .map(|&x| x as f64)
-                .collect(),
-        )
+fn weekly(daily: &[u64]) -> Vec<u64> {
+    daily.chunks(7).map(|week| week.iter().sum()).collect()
+}
+
+pub fn fit() {
+    let crate_path = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let output_dir = crate_path.join("examples/output");
+
+    let incidence = read_incidence(&crate_path.join("examples/input/sample_incidence.csv"));
+    let observed = &incidence[..FITTED_DAYS];
+
+    let model = RenewalFit {
+        transmission_change: None,
+    };
+    let distance = IncidenceDistance {
+        metric: METRIC,
+        observed: observed.to_vec(),
+    };
+
+    let log = JsonlObserver::create(output_dir.join("runs"), "renewal").unwrap();
+    let log_path = log.path().to_path_buf();
+    println!("Writing {}", log_path.display());
+
+    let generations = run_quantiles_with(
+        &model,
+        &distance,
+        &QUANTILES,
+        N_PARTICLES,
+        &format!("Renewal model fitted to the first {FITTED_WEEKS} weeks of sample incidence"),
+        &(StdoutObserver::new(), log),
+    );
+
+    write_csv(
+        &output_dir.join("particles.csv"),
+        particle_rows(&generations),
+    );
+    write_csv(
+        &output_dir.join("trajectories.csv"),
+        trajectory_rows(&generations),
+    );
+    if let Some(posterior) = generations.last() {
+        projection::write_scenarios(&model, posterior, FITTED_DAYS, &log_path);
     }
+}
+
+/// The `symptomatic_incidence` column of a `day,symptomatic_incidence` file.
+fn read_incidence(path: &Path) -> Vec<u64> {
+    csv::Reader::from_path(path)
+        .unwrap()
+        .records()
+        .map(|record| record.unwrap().get(1).unwrap().parse().unwrap())
+        .collect()
+}
+
+fn write_csv(path: &Path, rows: impl Iterator<Item = impl Serialize>) {
+    let mut writer = csv::Writer::from_path(path).unwrap();
+    for row in rows {
+        writer.serialize(row).unwrap();
+    }
+    writer.flush().unwrap();
+}
+
+/// Every particle of every generation, with its index within the generation.
+fn numbered_particles(
+    generations: &[Generation<RenewalFit>],
+) -> impl Iterator<Item = (usize, usize, &Particle<RenewalFit>)> {
+    generations.iter().flat_map(|generation| {
+        generation
+            .particles
+            .iter()
+            .enumerate()
+            .map(|(number, particle)| (generation.stats.generation, number, particle))
+    })
 }
 
 #[derive(Serialize)]
@@ -92,6 +204,21 @@ struct ParticleRow {
     seed: u64,
 }
 
+fn particle_rows(generations: &[Generation<RenewalFit>]) -> impl Iterator<Item = ParticleRow> {
+    numbered_particles(generations).map(|(generation, particle_number, particle)| {
+        let draw = particle.draw();
+        ParticleRow {
+            generation,
+            particle_number,
+            weight: particle.weight,
+            r0: draw.r0,
+            initial_infections: draw.initial_infections as u64,
+            distance: particle.distance,
+            seed: particle.seed,
+        }
+    })
+}
+
 #[derive(Serialize)]
 struct TrajectoryRow {
     generation: usize,
@@ -100,69 +227,18 @@ struct TrajectoryRow {
     symptomatic_incidence: u64,
 }
 
-fn write_csv<R: Serialize>(rows: &[R], path: &Path) {
-    let mut writer = csv::Writer::from_path(path).unwrap();
-    for row in rows {
-        writer.serialize(row).unwrap();
-    }
-    writer.flush().unwrap();
-}
-
-pub fn fit() {
-    let crate_path = Path::new(env!("CARGO_MANIFEST_DIR"));
-    let incidence_path = crate_path.join("examples/input/sample_incidence.csv");
-    let mut reader = csv::Reader::from_path(incidence_path).unwrap();
-    let incidence: Vec<u64> = reader
-        .records()
-        .map(|record| record.unwrap().get(1).unwrap().parse().unwrap())
-        .collect();
-
-    // Fit the first 6 weeks; later observations are held out.
-    let model = RenewalFit {
-        observed: incidence.into_iter().take(7 * 6).collect(),
-        transmission_change: None,
-    };
-    let output_dir = crate_path.join("examples/output");
-    let log = JsonlObserver::create(output_dir.join("runs"), "renewal").unwrap();
-    let log_path = log.path().to_path_buf();
-    println!("Writing {}", log_path.display());
-    let generations = run_quantiles_with(
-        &model,
-        &[0.1, 0.05, 0.01, 0.005],
-        2_000,
-        &(StdoutObserver::new(), log),
-    );
-
-    let mut particle_rows = Vec::new();
-    let mut trajectory_rows = Vec::new();
-    for population in &generations {
-        let generation = population.stats.generation;
-        for (particle_number, particle) in population.particles.iter().enumerate() {
-            let draw = particle.draw();
-            particle_rows.push(ParticleRow {
+fn trajectory_rows(generations: &[Generation<RenewalFit>]) -> impl Iterator<Item = TrajectoryRow> {
+    numbered_particles(generations).flat_map(|(generation, particle_number, particle)| {
+        particle
+            .output
+            .symptomatic_incidence
+            .iter()
+            .enumerate()
+            .map(move |(day, &symptomatic_incidence)| TrajectoryRow {
                 generation,
                 particle_number,
-                weight: particle.weight,
-                r0: draw.r0,
-                initial_infections: draw.initial_infections as u64,
-                distance: particle.distance,
-                seed: particle.seed,
-            });
-            for (day, incidence) in particle.output.symptomatic_incidence.iter().enumerate() {
-                trajectory_rows.push(TrajectoryRow {
-                    generation,
-                    particle_number,
-                    day,
-                    symptomatic_incidence: *incidence,
-                });
-            }
-        }
-    }
-
-    write_csv(&particle_rows, &output_dir.join("particles.csv"));
-    write_csv(&trajectory_rows, &output_dir.join("trajectories.csv"));
-
-    if let Some(posterior) = generations.last() {
-        projection::write_scenarios(&model, posterior, &log_path);
-    }
+                day,
+                symptomatic_incidence,
+            })
+    })
 }

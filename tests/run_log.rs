@@ -3,7 +3,7 @@
 
 use abcsmc::{
     IntPrior, JsonlObserver, Model, Priors, ProjectedTrajectory, Projection, RealPrior, RunLog,
-    define_priors, run_quantiles_with,
+    define_priors, distance_to, run_quantiles_with,
 };
 use rand::{SeedableRng, rngs::StdRng};
 
@@ -32,14 +32,6 @@ impl Model for Product {
     fn simulate(&self, draw: &Draw, _seed: u64) -> f64 {
         draw.rate * draw.count as f64
     }
-
-    fn distance(&self, output: &f64) -> f64 {
-        (output - 12.0).abs()
-    }
-
-    fn observed(&self) -> Option<Vec<f64>> {
-        Some(vec![12.0])
-    }
 }
 
 /// A finished run in its own temp dir; the closure gets the log's path.
@@ -50,7 +42,13 @@ fn with_run<T>(
     let dir = std::env::temp_dir().join(format!("abcsmc-{name}-{}", std::process::id()));
     let log = JsonlObserver::create(&dir, name).unwrap();
     let path = log.path().to_path_buf();
-    let generations = run_quantiles_with(&Product, &[0.5, 0.2], 100, &log);
+    let distance = distance_to(
+        "distance to 12",
+        &[12.0],
+        |output: &f64, observed: &[f64]| (output - observed[0]).abs(),
+    );
+    let generations =
+        run_quantiles_with(&Product, &distance, &[0.5, 0.2], 100, "product fit", &log);
     drop(log);
     let result = check(&path, &generations);
     std::fs::remove_dir_all(&dir).unwrap();
@@ -62,6 +60,8 @@ fn a_log_reads_back_as_the_run_that_wrote_it() {
     with_run("readback", |path, generations| {
         let log = RunLog::read(path).unwrap();
         assert_eq!(log.id, "readback");
+        assert_eq!(log.description.as_deref(), Some("product fit"));
+        assert_eq!(log.distance_description.as_deref(), Some("distance to 12"));
         assert_eq!(log.n_particles, 100);
         assert!(log.finished);
         assert_eq!(log.observed, Some(vec![12.0]));

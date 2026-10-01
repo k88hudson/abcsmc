@@ -195,15 +195,16 @@ impl Model for WideDiscreteModel {
     fn simulate(&self, params: &Params, _seed: u64) -> i64 {
         params.int(0)
     }
-
-    fn distance(&self, output: &i64) -> f64 {
-        (output - 500).abs() as f64
-    }
 }
 
 #[test]
 fn default_kernel_adapts_discrete_walk_width() {
-    let generations = run(&WideDiscreteModel, &[400.0, 100.0, 20.0, 5.0], 200);
+    let generations = run(
+        &WideDiscreteModel,
+        &|output: &i64| (output - 500).abs() as f64,
+        &[400.0, 100.0, 20.0, 5.0],
+        200,
+    );
     assert_eq!(generations.len(), 4);
     let mean: f64 = generations[3]
         .particles
@@ -228,10 +229,6 @@ impl Model for FixedKernelModel {
         params.real(0)
     }
 
-    fn distance(&self, output: &f64) -> f64 {
-        (output - 5.0).abs()
-    }
-
     fn perturbation_kernel(&self) -> Box<dyn PerturbationKernel> {
         Box::new(UniformKernel::new(0, 1.0))
     }
@@ -243,7 +240,12 @@ impl Model for FixedKernelModel {
 
 #[test]
 fn model_selected_kernel_drives_the_run() {
-    let generations = run(&FixedKernelModel, &[2.5, 1.0, 0.25], 200);
+    let generations = run(
+        &FixedKernelModel,
+        &|output: &f64| (output - 5.0).abs(),
+        &[2.5, 1.0, 0.25],
+        200,
+    );
     assert_eq!(generations.len(), 3);
     let mean: f64 = generations[2]
         .particles

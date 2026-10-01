@@ -11,6 +11,7 @@ const started = JSON.stringify({
   type: "run_started",
   version: 1,
   id: "t",
+  description: "a test run",
   n_particles: 3,
   n_generations: 2,
   quantiles: [0.5],
@@ -41,6 +42,9 @@ describe("applyLine", () => {
     applyLine(s, started);
     expect(s.status).toBe("running");
     expect(s.params.map((p) => p.name)).toEqual(["a", "k"]);
+    expect(s.description).toBe("a test run");
+    // Absent from the event, as in logs written before the field existed.
+    expect(s.distanceDescription).toBeNull();
 
     applyLine(
       s,

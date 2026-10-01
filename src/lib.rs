@@ -1,6 +1,8 @@
 use rand::{SeedableRng, rngs::StdRng};
 
 pub mod diagnostics;
+pub mod distance;
+pub use distance::{Distance, DistanceFn, DistanceTo, distance_fn, distance_to};
 mod kernel;
 pub use kernel::*;
 mod variance_adapter;
@@ -73,8 +75,10 @@ pub struct GenerationStats {
 
 /// Run one generation: prior rejection when there is no previous population,
 /// otherwise one SMC step from it.
+#[allow(clippy::too_many_arguments)]
 fn run_generation<M>(
     model: &M,
+    distance: &(impl Distance<M::Output> + ?Sized),
     generation: usize,
     tolerance: f64,
     n_particles: usize,
@@ -92,9 +96,10 @@ where
         observer.particle_accepted(generation, params, distance, attempts)
     };
     let output = match previous {
-        None => initialize(model, tolerance, n_particles, rng, on_accept),
+        None => initialize(model, distance, tolerance, n_particles, rng, on_accept),
         Some((previous, kernel)) => step(
             model,
+            distance,
             tolerance,
             n_particles,
             previous,
@@ -131,6 +136,7 @@ where
 /// be filled.
 fn run_from<M>(
     model: &M,
+    distance: &(impl Distance<M::Output> + ?Sized),
     tolerances: &[f64],
     n_particles: usize,
     mut generations: Vec<Generation<M>>,
@@ -153,6 +159,7 @@ where
             .map(|g| (g.particles.as_slice(), kernel.as_ref()));
         match run_generation(
             model,
+            distance,
             generation,
             tolerance,
             n_particles,
@@ -179,23 +186,41 @@ fn params_of<M: Model>(generation: &Generation<M>) -> Vec<Params> {
         .collect()
 }
 
-/// Run ABC-SMC with one generation per tolerance: generation 0 is rejection sampling from the prior at `tolerances[0]`, and
-/// each later generation resamples, perturbs, and reweights the previous one.
+/// Run ABC-SMC with one generation per tolerance: generation 0 is rejection
+/// sampling from the prior at `tolerances[0]`, and each later generation
+/// resamples, perturbs, and reweights the previous one. A simulation is
+/// accepted when `distance` puts it within the generation's tolerance.
 /// Progress is printed to stdout; see [`run_with`] to observe the run.
-pub fn run<M>(model: &M, tolerances: &[f64], n_particles: usize) -> Vec<Generation<M>>
+pub fn run<M>(
+    model: &M,
+    distance: &(impl Distance<M::Output> + ?Sized),
+    tolerances: &[f64],
+    n_particles: usize,
+) -> Vec<Generation<M>>
 where
     M: Model + Sync,
     M::Output: Send + Sync,
 {
-    run_with(model, tolerances, n_particles, &StdoutObserver::new())
+    run_with(
+        model,
+        distance,
+        tolerances,
+        n_particles,
+        "",
+        &StdoutObserver::new(),
+    )
 }
 
 /// [`run`] reporting to `observer` instead of stdout. Pair observers with a
 /// tuple: `&(StdoutObserver::new(), JsonlObserver::create(dir, id)?)`.
+/// `description` says what this run is, for observers to show and log; pass
+/// `""` for none.
 pub fn run_with<M>(
     model: &M,
+    distance: &(impl Distance<M::Output> + ?Sized),
     tolerances: &[f64],
     n_particles: usize,
+    description: &str,
     observer: &impl RunObserver<M>,
 ) -> Vec<Generation<M>>
 where
@@ -203,10 +228,18 @@ where
     M::Output: Send + Sync,
 {
     let mut rng = StdRng::seed_from_u64(model.rng_seed());
-    let meta = RunMeta::new(model, n_particles, tolerances.len(), None);
+    let meta = RunMeta::new(
+        model,
+        distance,
+        description,
+        n_particles,
+        tolerances.len(),
+        None,
+    );
     observer.run_started(model, &meta);
     run_from(
         model,
+        distance,
         tolerances,
         n_particles,
         Vec::new(),
@@ -219,19 +252,34 @@ where
 /// distribution. Generation 0 is an unconstrained prior sample (infinite
 /// tolerance); generation `g >= 1` accepts distances up to `quantiles[g - 1]`
 /// of generation 0's distances. Returns `quantiles.len() + 1` generations.
-pub fn run_quantiles<M>(model: &M, quantiles: &[f64], n_particles: usize) -> Vec<Generation<M>>
+pub fn run_quantiles<M>(
+    model: &M,
+    distance: &(impl Distance<M::Output> + ?Sized),
+    quantiles: &[f64],
+    n_particles: usize,
+) -> Vec<Generation<M>>
 where
     M: Model + Sync,
     M::Output: Send + Sync,
 {
-    run_quantiles_with(model, quantiles, n_particles, &StdoutObserver::new())
+    run_quantiles_with(
+        model,
+        distance,
+        quantiles,
+        n_particles,
+        "",
+        &StdoutObserver::new(),
+    )
 }
 
-/// [`run_quantiles`] reporting to `observer` instead of stdout.
+/// [`run_quantiles`] reporting to `observer` instead of stdout, with a
+/// `description` of the run as in [`run_with`].
 pub fn run_quantiles_with<M>(
     model: &M,
+    distance: &(impl Distance<M::Output> + ?Sized),
     quantiles: &[f64],
     n_particles: usize,
+    description: &str,
     observer: &impl RunObserver<M>,
 ) -> Vec<Generation<M>>
 where
@@ -239,10 +287,18 @@ where
     M::Output: Send + Sync,
 {
     let mut rng = StdRng::seed_from_u64(model.rng_seed());
-    let meta = RunMeta::new(model, n_particles, quantiles.len() + 1, Some(quantiles));
+    let meta = RunMeta::new(
+        model,
+        distance,
+        description,
+        n_particles,
+        quantiles.len() + 1,
+        Some(quantiles),
+    );
     observer.run_started(model, &meta);
     let Some(prior) = run_generation(
         model,
+        distance,
         0,
         f64::INFINITY,
         n_particles,
@@ -261,6 +317,7 @@ where
         .collect();
     run_from(
         model,
+        distance,
         &tolerances,
         n_particles,
         vec![prior],

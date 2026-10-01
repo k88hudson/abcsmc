@@ -21,16 +21,16 @@ impl Model for Toy {
         let noise = (rng.next_u64() >> 11) as f64 / (1u64 << 53) as f64;
         params.real(0) + noise
     }
+}
 
-    fn distance(&self, output: &f64) -> f64 {
-        (output - 5.5).abs()
-    }
+fn to_target(output: &f64) -> f64 {
+    (output - 5.5).abs()
 }
 
 /// Posterior mean after a quantile-scheduled run with no observer output.
 #[unsafe(no_mangle)]
 pub extern "C" fn posterior_mean() -> f64 {
-    let generations = run_quantiles_with(&Toy, &[0.5, 0.2, 0.05], 200, &Silent);
+    let generations = run_quantiles_with(&Toy, &to_target, &[0.5, 0.2, 0.05], 200, "", &Silent);
     if generations.len() != 4 {
         return f64::NAN;
     }
@@ -44,5 +44,5 @@ pub extern "C" fn posterior_mean() -> f64 {
 /// Generations completed by the default driver, which reports to stdout.
 #[unsafe(no_mangle)]
 pub extern "C" fn default_run_generations() -> u32 {
-    run(&Toy, &[2.5, 1.0], 100).len() as u32
+    run(&Toy, &to_target, &[2.5, 1.0], 100).len() as u32
 }

@@ -25,7 +25,12 @@ struct Scenario {
     adjust_draw: fn(&mut RenewalDraw),
 }
 
-pub fn write_scenarios(model: &RenewalFit, posterior: &Generation<RenewalFit>, log_path: &Path) {
+pub fn write_scenarios(
+    model: &RenewalFit,
+    posterior: &Generation<RenewalFit>,
+    fitted_days: usize,
+    log_path: &Path,
+) {
     let scenarios = [
         Scenario {
             label: "Baseline",
@@ -38,10 +43,9 @@ pub fn write_scenarios(model: &RenewalFit, posterior: &Generation<RenewalFit>, l
             label: "Transmission -30% after the fitted window",
             model: RenewalFit {
                 transmission_change: Some(TransmissionChange {
-                    start: model.observed.len(),
+                    start: fitted_days,
                     multiplier: 0.7,
                 }),
-                ..model.clone()
             },
             adjust_draw: |_| {},
         },

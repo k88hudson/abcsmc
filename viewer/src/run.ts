@@ -59,6 +59,8 @@ export interface Projection {
 
 export interface RunState {
   id: string | null;
+  description: string | null;
+  distanceDescription: string | null;
   version: number | null;
   nParticles: number;
   nGenerations: number;
@@ -77,6 +79,9 @@ export type RunEvent =
       type: "run_started";
       version: number;
       id: string;
+      // Absent in logs written before descriptions existed.
+      description?: string | null;
+      distance_description?: string | null;
       n_particles: number;
       n_generations: number;
       quantiles: number[] | null;
@@ -105,6 +110,8 @@ export type RunEvent =
 export function emptyRun(): RunState {
   return {
     id: null,
+    description: null,
+    distanceDescription: null,
     version: null,
     nParticles: 0,
     nGenerations: 0,
@@ -145,6 +152,8 @@ export function applyEvent(state: RunState, event: RunEvent): RunState {
         lines: state.lines,
         badLines: state.badLines,
         id: event.id,
+        description: event.description ?? null,
+        distanceDescription: event.distance_description ?? null,
         version: event.version,
         nParticles: event.n_particles,
         nGenerations: event.n_generations,
