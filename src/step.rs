@@ -1,11 +1,11 @@
-use crate::{Distance, Draw, Model, Params, Particle, PerturbationKernel, Priors};
+use crate::{CalibrationModel, Distance, Draw, Params, Particle, PerturbationKernel, Priors};
 use core::f64;
 use rand::{Rng, SeedableRng, rngs::StdRng};
 use rand_distr::{Distribution, weighted::WeightedIndex};
 use rayon::prelude::*;
 
 /// Skipped for unnamed draws (`type Draw = Params`), which have nothing to check against.
-fn check_arity<M: Model>(priors: &Priors) {
+fn check_arity<M: CalibrationModel>(priors: &Priors) {
     let names = <M::Draw as Draw>::NAMES;
     assert!(
         names.is_empty() || names.len() == priors.len(),
@@ -15,7 +15,7 @@ fn check_arity<M: Model>(priors: &Priors) {
     );
 }
 
-pub struct StepOutput<M: Model> {
+pub struct StepOutput<M: CalibrationModel> {
     pub particles: Vec<Particle<M>>,
     /// Simulations run, accepted or not. Out-of-support proposals never reach
     /// the model and are not counted.
@@ -38,7 +38,7 @@ pub fn initialize<M>(
     on_accept: impl Fn(&Params, f64, u64) + Sync,
 ) -> StepOutput<M>
 where
-    M: Model + Sync,
+    M: CalibrationModel + Sync,
     M::Output: Send,
 {
     let priors = model.priors();
@@ -104,7 +104,7 @@ pub fn step<M>(
     on_accept: impl Fn(&Params, f64, u64) + Sync,
 ) -> StepOutput<M>
 where
-    M: Model + Sync,
+    M: CalibrationModel + Sync,
     M::Output: Send + Sync,
 {
     let priors = model.priors();
@@ -182,7 +182,7 @@ where
     }
 }
 
-pub fn get_ess<M: Model>(step_output: &StepOutput<M>) -> f64 {
+pub fn get_ess<M: CalibrationModel>(step_output: &StepOutput<M>) -> f64 {
     1.0 / step_output
         .particles
         .iter()
@@ -190,7 +190,7 @@ pub fn get_ess<M: Model>(step_output: &StepOutput<M>) -> f64 {
         .sum::<f64>()
 }
 
-pub fn get_perplexity<M: Model>(step_output: &StepOutput<M>) -> f64 {
+pub fn get_perplexity<M: CalibrationModel>(step_output: &StepOutput<M>) -> f64 {
     f64::exp(
         step_output
             .particles

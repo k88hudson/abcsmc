@@ -11,7 +11,7 @@
 
 use std::path::Path;
 
-use abcsmc::{Generation, Model, ProjectedTrajectory, Projection};
+use abcsmc::{CalibrationModel, Generation, ProjectedTrajectory, Projection};
 use rand::{SeedableRng, rngs::StdRng};
 
 use crate::calibration::{RenewalDraw, RenewalFit};

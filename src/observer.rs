@@ -10,7 +10,7 @@ use std::sync::Mutex;
 use std::time::Duration;
 
 use crate::platform::{Bar, Instant};
-use crate::{Distance, Draw, Generation, Model, Params, Value};
+use crate::{CalibrationModel, Distance, Draw, Generation, Params, Value};
 
 /// What a run declares before its first generation.
 #[derive(Clone, Debug)]
@@ -36,7 +36,7 @@ pub struct ParamMeta {
 }
 
 impl RunMeta {
-    pub(crate) fn new<M: Model>(
+    pub(crate) fn new<M: CalibrationModel>(
         model: &M,
         distance: &(impl Distance<M::Output> + ?Sized),
         description: &str,
@@ -71,7 +71,7 @@ impl RunMeta {
 /// `particle_accepted` is called from worker threads while a generation is
 /// filling, before weights exist; the complete weighted population arrives
 /// with `generation_completed`.
-pub trait RunObserver<M: Model>: Sync {
+pub trait RunObserver<M: CalibrationModel>: Sync {
     fn run_started(&self, _model: &M, _meta: &RunMeta) {}
     fn generation_started(&self, _generation: usize, _tolerance: f64) {}
     /// `attempts` counts this particle's own simulations, accepted or not.
@@ -89,7 +89,7 @@ pub trait RunObserver<M: Model>: Sync {
     fn run_finished(&self, _model: &M, _generations: &[Generation<M>]) {}
 }
 
-impl<M: Model, A: RunObserver<M>, B: RunObserver<M>> RunObserver<M> for (A, B) {
+impl<M: CalibrationModel, A: RunObserver<M>, B: RunObserver<M>> RunObserver<M> for (A, B) {
     fn run_started(&self, model: &M, meta: &RunMeta) {
         self.0.run_started(model, meta);
         self.1.run_started(model, meta);
@@ -121,7 +121,7 @@ impl<M: Model, A: RunObserver<M>, B: RunObserver<M>> RunObserver<M> for (A, B) {
 /// Observes nothing.
 pub struct Silent;
 
-impl<M: Model> RunObserver<M> for Silent {}
+impl<M: CalibrationModel> RunObserver<M> for Silent {}
 
 /// Terminal output: a progress bar per generation and a summary line after
 /// each one.
@@ -137,7 +137,7 @@ impl StdoutObserver {
     }
 }
 
-impl<M: Model> RunObserver<M> for StdoutObserver {
+impl<M: CalibrationModel> RunObserver<M> for StdoutObserver {
     fn run_started(&self, _model: &M, meta: &RunMeta) {
         if let Some(description) = &meta.description {
             println!("{description}");
@@ -316,7 +316,7 @@ impl JsonlObserver {
     }
 }
 
-impl<M: Model> RunObserver<M> for JsonlObserver {
+impl<M: CalibrationModel> RunObserver<M> for JsonlObserver {
     fn run_started(&self, _model: &M, meta: &RunMeta) {
         let mut line = String::new();
         line.push_str(r#"{"type":"run_started","version":1,"id":"#);

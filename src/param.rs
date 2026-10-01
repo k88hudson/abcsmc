@@ -16,7 +16,7 @@ impl Value {
 
 /// A particle's parameter vector, in the order the priors were declared.
 ///
-/// Read individual parameters in `Model::simulate` with [`Params::real`] /
+/// Read individual parameters in `CalibrationModel::simulate` with [`Params::real`] /
 /// [`Params::int`] by their declaration index.
 #[derive(Clone, Debug)]
 pub struct Params(pub(crate) Vec<Value>);

@@ -42,7 +42,7 @@ One JSON object per line, in this order. `JsonlObserver` in
 
 `params` are positional in prior-declaration order; integers are written as
 JSON integers. `seed` is a string because it is a `u64`. Trajectories and
-`observed` are only present when the model implements `Model::trajectory`
+`observed` are only present when the model implements `CalibrationModel::trajectory`
 and the run's distance provides `Distance::observed`.
 
 ## Layout

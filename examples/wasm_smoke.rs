@@ -2,13 +2,13 @@
 //! `wasm32-unknown-unknown` and called from `tests/wasm_smoke.mjs` to check
 //! that the engine runs there, not only that it compiles. `plz wasm` does both.
 
-use abcsmc::{Model, Params, Priors, RealPrior, Silent, run, run_quantiles_with};
+use abcsmc::{CalibrationModel, Params, Priors, RealPrior, Silent, run, run_quantiles_with};
 use rand::{Rng, SeedableRng, rngs::StdRng};
 
 /// Estimate `x` under `Uniform(0, 10)` from `x` plus uniform noise, targeting 5.
 struct Toy;
 
-impl Model for Toy {
+impl CalibrationModel for Toy {
     type Draw = Params;
     type Output = f64;
 

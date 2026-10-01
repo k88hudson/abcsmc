@@ -89,7 +89,7 @@ mod reader {
     }
 
     /// A particle without its simulation output. `(draw, seed)` replays the
-    /// output through `Model::simulate`.
+    /// output through `CalibrationModel::simulate`.
     #[derive(Clone, Debug)]
     pub struct LoggedParticle {
         pub params: Params,

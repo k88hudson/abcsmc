@@ -8,16 +8,16 @@
 //! the row types derive `Serialize`, so a host can hand them straight to a CSV
 //! or JSON writer.
 
-use crate::{Draw, Generation, GenerationStats, Model, Value};
+use crate::{CalibrationModel, Draw, Generation, GenerationStats, Value};
 
-fn param_name<M: Model>(index: usize) -> String {
+fn param_name<M: CalibrationModel>(index: usize) -> String {
     <M::Draw as Draw>::NAMES
         .get(index)
         .map(|name| (*name).to_string())
         .unwrap_or_else(|| format!("param_{index}"))
 }
 
-fn n_params<M: Model>(generations: &[Generation<M>]) -> usize {
+fn n_params<M: CalibrationModel>(generations: &[Generation<M>]) -> usize {
     generations
         .first()
         .and_then(|s| s.particles.first())
@@ -26,7 +26,10 @@ fn n_params<M: Model>(generations: &[Generation<M>]) -> usize {
 }
 
 /// `(value, weight)` pairs for one parameter of one generation, weights normalized
-fn generation_values<M: Model>(generation: &Generation<M>, param: usize) -> Vec<(f64, f64)> {
+fn generation_values<M: CalibrationModel>(
+    generation: &Generation<M>,
+    param: usize,
+) -> Vec<(f64, f64)> {
     let total: f64 = generation.particles.iter().map(|p| p.weight).sum();
     generation
         .particles
@@ -36,7 +39,7 @@ fn generation_values<M: Model>(generation: &Generation<M>, param: usize) -> Vec<
 }
 
 /// The per-generation statistics as rows (the particles/acceptance table).
-pub fn generation_rows<M: Model>(generations: &[Generation<M>]) -> Vec<GenerationStats> {
+pub fn generation_rows<M: CalibrationModel>(generations: &[Generation<M>]) -> Vec<GenerationStats> {
     generations.iter().map(|s| s.stats).collect()
 }
 
@@ -52,7 +55,7 @@ pub struct ParamRow {
     pub weight: f64,
 }
 
-pub fn param_rows<M: Model>(generations: &[Generation<M>]) -> Vec<ParamRow> {
+pub fn param_rows<M: CalibrationModel>(generations: &[Generation<M>]) -> Vec<ParamRow> {
     let mut rows = Vec::new();
     for generation in generations {
         for (particle_number, particle) in generation.particles.iter().enumerate() {
@@ -84,7 +87,10 @@ pub struct HistogramRow {
     pub weight: f64,
 }
 
-pub fn histogram_rows<M: Model>(generations: &[Generation<M>], bins: usize) -> Vec<HistogramRow> {
+pub fn histogram_rows<M: CalibrationModel>(
+    generations: &[Generation<M>],
+    bins: usize,
+) -> Vec<HistogramRow> {
     let mut rows = Vec::new();
     for param in 0..n_params::<M>(generations) {
         let is_int = matches!(
@@ -150,7 +156,10 @@ pub struct KdeRow {
     pub density: f64,
 }
 
-pub fn kde_rows<M: Model>(generations: &[Generation<M>], grid_points: usize) -> Vec<KdeRow> {
+pub fn kde_rows<M: CalibrationModel>(
+    generations: &[Generation<M>],
+    grid_points: usize,
+) -> Vec<KdeRow> {
     let mut rows = Vec::new();
     for param in 0..n_params::<M>(generations) {
         if matches!(
@@ -218,7 +227,7 @@ pub struct TrajectoryRow {
 /// Extract each particle's series with `extract`, keeping at most
 /// `max_per_generation` particles per generation (evenly strided, so the sample spans
 /// the population).
-pub fn trajectory_rows<M: Model>(
+pub fn trajectory_rows<M: CalibrationModel>(
     generations: &[Generation<M>],
     max_per_generation: usize,
     extract: impl Fn(&M::Output) -> Vec<f64>,

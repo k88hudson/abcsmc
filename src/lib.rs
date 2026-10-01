@@ -30,12 +30,12 @@ mod run_log;
 pub use run_log::*;
 
 /// One completed generation: its accepted particles and run statistics.
-pub struct Generation<M: Model> {
+pub struct Generation<M: CalibrationModel> {
     pub particles: Vec<Particle<M>>,
     pub stats: GenerationStats,
 }
 
-impl<M: Model> Generation<M> {
+impl<M: CalibrationModel> Generation<M> {
     /// `n` particles drawn with replacement in proportion to their weights:
     /// an equally weighted sample of this generation's posterior.
     pub fn resample(&self, n: usize, rng: &mut impl rand::Rng) -> Vec<&Particle<M>> {
@@ -87,7 +87,7 @@ fn run_generation<M>(
     observer: &impl RunObserver<M>,
 ) -> Option<Generation<M>>
 where
-    M: Model + Sync,
+    M: CalibrationModel + Sync,
     M::Output: Send + Sync,
 {
     observer.generation_started(generation, tolerance);
@@ -144,7 +144,7 @@ fn run_from<M>(
     observer: &impl RunObserver<M>,
 ) -> Vec<Generation<M>>
 where
-    M: Model + Sync,
+    M: CalibrationModel + Sync,
     M::Output: Send + Sync,
 {
     let mut kernel = model.perturbation_kernel();
@@ -178,7 +178,7 @@ where
     generations
 }
 
-fn params_of<M: Model>(generation: &Generation<M>) -> Vec<Params> {
+fn params_of<M: CalibrationModel>(generation: &Generation<M>) -> Vec<Params> {
     generation
         .particles
         .iter()
@@ -198,7 +198,7 @@ pub fn run<M>(
     n_particles: usize,
 ) -> Vec<Generation<M>>
 where
-    M: Model + Sync,
+    M: CalibrationModel + Sync,
     M::Output: Send + Sync,
 {
     run_with(
@@ -224,7 +224,7 @@ pub fn run_with<M>(
     observer: &impl RunObserver<M>,
 ) -> Vec<Generation<M>>
 where
-    M: Model + Sync,
+    M: CalibrationModel + Sync,
     M::Output: Send + Sync,
 {
     let mut rng = StdRng::seed_from_u64(model.rng_seed());
@@ -259,7 +259,7 @@ pub fn run_quantiles<M>(
     n_particles: usize,
 ) -> Vec<Generation<M>>
 where
-    M: Model + Sync,
+    M: CalibrationModel + Sync,
     M::Output: Send + Sync,
 {
     run_quantiles_with(
@@ -283,7 +283,7 @@ pub fn run_quantiles_with<M>(
     observer: &impl RunObserver<M>,
 ) -> Vec<Generation<M>>
 where
-    M: Model + Sync,
+    M: CalibrationModel + Sync,
     M::Output: Send + Sync,
 {
     let mut rng = StdRng::seed_from_u64(model.rng_seed());

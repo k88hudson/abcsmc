@@ -1,11 +1,11 @@
 //! Kernel transition probabilities and variance adapters against closed forms,
-//! plus kernel selection through `Model`.
+//! plus kernel selection through `CalibrationModel`.
 
 use abcsmc::{
     AdaptDiscreteUniformVariance, AdaptIdentityVariance, AdaptMultivariateNormalVariance,
-    AdaptNormalVariance, AdaptUniformVariance, DiscreteUniformKernel, IndependentKernels, IntPrior,
-    Model, MultivariateNormalKernel, NormalKernel, Params, PerturbationKernel, Priors, RealPrior,
-    UniformKernel, Value, VarianceAdapter, run,
+    AdaptNormalVariance, AdaptUniformVariance, CalibrationModel, DiscreteUniformKernel,
+    IndependentKernels, IntPrior, MultivariateNormalKernel, NormalKernel, Params,
+    PerturbationKernel, Priors, RealPrior, UniformKernel, Value, VarianceAdapter, run,
 };
 use rand::{SeedableRng, rngs::StdRng};
 use std::f64::consts::PI;
@@ -184,7 +184,7 @@ fn discrete_adapter_rescales_every_discrete_walk() {
 /// A wide integer prior targeting 500 must still converge under the default kernel.
 struct WideDiscreteModel;
 
-impl Model for WideDiscreteModel {
+impl CalibrationModel for WideDiscreteModel {
     type Draw = Params;
     type Output = i64;
 
@@ -217,7 +217,7 @@ fn default_kernel_adapts_discrete_walk_width() {
 /// Estimate `x` under `Uniform(0, 10)` targeting 5, with a fixed uniform kernel.
 struct FixedKernelModel;
 
-impl Model for FixedKernelModel {
+impl CalibrationModel for FixedKernelModel {
     type Draw = Params;
     type Output = f64;
 

@@ -6,7 +6,7 @@
 use std::path::Path;
 
 use abcsmc::{
-    Distance, Generation, IntPrior, JsonlObserver, Model, Particle, Priors, RealPrior,
+    CalibrationModel, Distance, Generation, IntPrior, JsonlObserver, Particle, Priors, RealPrior,
     StdoutObserver, define_priors, distance, run_quantiles_with,
 };
 use rand::{SeedableRng, rngs::StdRng};
@@ -38,7 +38,7 @@ pub struct RenewalFit {
     pub transmission_change: Option<TransmissionChange>,
 }
 
-impl Model for RenewalFit {
+impl CalibrationModel for RenewalFit {
     type Draw = RenewalDraw;
     type Output = RenewalOutput;
 

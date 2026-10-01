@@ -2,8 +2,8 @@
 #![cfg(feature = "serde")]
 
 use abcsmc::{
-    IntPrior, JsonlObserver, Model, Priors, ProjectedTrajectory, Projection, RealPrior, RunLog,
-    define_priors, distance_to, run_quantiles_with,
+    CalibrationModel, IntPrior, JsonlObserver, Priors, ProjectedTrajectory, Projection, RealPrior,
+    RunLog, define_priors, distance_to, run_quantiles_with,
 };
 use rand::{SeedableRng, rngs::StdRng};
 
@@ -17,7 +17,7 @@ define_priors! {
 /// Output is `rate * count`, targeting 12.
 struct Product;
 
-impl Model for Product {
+impl CalibrationModel for Product {
     type Draw = Draw;
     type Output = f64;
 

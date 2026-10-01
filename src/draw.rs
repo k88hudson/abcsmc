@@ -5,14 +5,14 @@ use crate::{Params, Value};
 /// The engine works in a positional vector of [`Value`]s — that is what the
 /// priors, the prior density, and the perturbation kernel all operate on — but a
 /// model never has to. Implementations of this trait rebuild a named struct from
-/// that vector, so [`Model::simulate`] reads fields rather than indices.
+/// that vector, so [`CalibrationModel::simulate`] reads fields rather than indices.
 ///
 /// Write implementations with [`define_priors!`], which generates the parameter
 /// struct, a matching struct of priors over it, and this impl from one
 /// declaration. [`Params`] also implements it, as an escape hatch for models that
 /// want the raw positional vector.
 ///
-/// [`Model::simulate`]: crate::Model::simulate
+/// [`CalibrationModel::simulate`]: crate::CalibrationModel::simulate
 /// [`define_priors!`]: crate::define_priors
 pub trait Draw: Sized {
     /// Parameter names, in the order their priors are declared.

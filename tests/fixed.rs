@@ -4,8 +4,9 @@
 use std::collections::HashSet;
 
 use abcsmc::{
-    Distance, Draw, Generation, IntPrior, JsonlObserver, Model, Params, Priors, RealPrior, Silent,
-    define_priors, distance_to, run, run_quantiles, run_quantiles_with, run_with,
+    CalibrationModel, Distance, Draw, Generation, IntPrior, JsonlObserver, Params, Priors,
+    RealPrior, Silent, define_priors, distance_to, run, run_quantiles, run_quantiles_with,
+    run_with,
 };
 use rand::{Rng, SeedableRng, rngs::StdRng};
 
@@ -16,7 +17,7 @@ fn to_five(output: &f64) -> f64 {
 /// Estimate `x` under `Uniform(0, 10)` with `simulate(x) = x`, targeting 5.
 struct ToyModel;
 
-impl Model for ToyModel {
+impl CalibrationModel for ToyModel {
     type Draw = Params;
     type Output = f64;
 
@@ -32,7 +33,7 @@ impl Model for ToyModel {
 /// `ToyModel` plus seed-driven uniform noise on `[0, 1)`.
 struct NoisyModel;
 
-impl Model for NoisyModel {
+impl CalibrationModel for NoisyModel {
     type Draw = Params;
     type Output = f64;
 
@@ -51,15 +52,17 @@ const N: usize = 200;
 const QUANTILES: [f64; 3] = [0.5, 0.2, 0.05];
 const TOLERANCES: [f64; 3] = [2.5, 1.0, 0.25];
 
-fn weighted_mean<M: Model<Draw = Params>>(population: &[abcsmc::Particle<M>]) -> f64 {
+fn weighted_mean<M: CalibrationModel<Draw = Params>>(population: &[abcsmc::Particle<M>]) -> f64 {
     population.iter().map(|p| p.weight * p.params.real(0)).sum()
 }
 
-fn max_distance<M: Model>(population: &[abcsmc::Particle<M>]) -> f64 {
+fn max_distance<M: CalibrationModel>(population: &[abcsmc::Particle<M>]) -> f64 {
     population.iter().map(|p| p.distance).fold(0.0, f64::max)
 }
 
-fn assert_tightens_and_converges<M: Model<Draw = Params>>(generations: &[Generation<M>]) {
+fn assert_tightens_and_converges<M: CalibrationModel<Draw = Params>>(
+    generations: &[Generation<M>],
+) {
     for k in 1..generations.len() {
         assert!(
             max_distance(&generations[k].particles) <= max_distance(&generations[k - 1].particles),
@@ -153,7 +156,7 @@ fn particle_seed_replays_its_simulation() {
 /// instead of hanging.
 struct UnreachableModel;
 
-impl Model for UnreachableModel {
+impl CalibrationModel for UnreachableModel {
     type Draw = Params;
     type Output = f64;
 
@@ -189,7 +192,7 @@ fn macro_distance(output: &(f64, i64)) -> f64 {
     (output.0 - 5.0).abs() + ((output.1 - 3).abs() as f64)
 }
 
-impl Model for MacroModel {
+impl CalibrationModel for MacroModel {
     type Draw = MacroDraw;
     type Output = (f64, i64);
 
@@ -241,7 +244,7 @@ fn macro_generated_draw_maps_priors_to_named_fields() {
 /// `NoisyModel` that also exposes trajectories.
 struct TracedModel;
 
-impl Model for TracedModel {
+impl CalibrationModel for TracedModel {
     type Draw = Params;
     type Output = f64;
 

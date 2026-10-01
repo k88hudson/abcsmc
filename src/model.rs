@@ -4,7 +4,7 @@ use crate::{Draw, PerturbationKernel, Priors, VarianceAdapter, default_adapter, 
 /// simulation is scored against data is a separate [`Distance`](crate::Distance)
 /// passed to the run. The engine derives sampling, prior density, and the
 /// perturbation kernel from the priors.
-pub trait Model {
+pub trait CalibrationModel {
     /// Calibrated parameters as a typed struct, usually from [`define_priors!`].
     /// `Params` reads them positionally instead.
     ///
@@ -14,7 +14,7 @@ pub trait Model {
     /// Simulated output retained on each accepted particle.
     type Output;
 
-    /// Priors in the same order as [`Model::Draw`] declares its fields.
+    /// Priors in the same order as [`CalibrationModel::Draw`] declares its fields.
     fn priors(&self) -> Priors;
 
     /// Simulate under `seed`. `(draw, seed)` fully determines the output, so a
