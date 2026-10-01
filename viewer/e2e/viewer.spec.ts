@@ -180,6 +180,91 @@ test.describe("without file handles", () => {
     await expect(subtitle).toContainText("Gen 1, 20 of 100");
   });
 
+  test("pairwise scatters report each pair's correlation", async ({ page }) => {
+    await page.goto("/");
+    await page.getByLabel("Load run.jsonl").setInputFiles(fixture);
+    await expect(page.getByTestId("status")).toHaveText("Finished");
+
+    // Two parameters make one pair; choosing the other one swaps the axes.
+    const section = page.getByTestId("correlations");
+    await expect(section.locator(".line-chart-wrapper")).toHaveCount(1);
+    await expect(section).toContainText(
+      /r0 ~ initial_infections: r = -?\d\.\d\d \(Gen 4\)/,
+    );
+    await expect(section.getByRole("combobox", { name: "Sort" })).toHaveCount(
+      0,
+    );
+    await section.getByRole("combobox", { name: "Parameter" }).click();
+    await page.getByRole("option", { name: "initial_infections" }).click();
+    await expect(section).toContainText("initial_infections ~ r0: r =");
+  });
+
+  test("pairwise scatters show one parameter against the others, sorted", async ({
+    page,
+  }) => {
+    // Three parameters: b follows a exactly, c runs against it loosely.
+    const particles = Array.from({ length: 20 }, (_, i) => ({
+      params: [i, 2 * i, 20 - i + (i % 3) * 4],
+      weight: 1 / 20,
+      distance: 0,
+      seed: String(i),
+    }));
+    const stats = {
+      tolerance: null,
+      accepted: 20,
+      attempts: 20,
+      acceptance_ratio: 1,
+      ess: 20,
+      perplexity: 20,
+      duration_seconds: 0,
+    };
+    const lines = [
+      {
+        type: "run_started",
+        version: 1,
+        id: "pairs",
+        n_particles: 20,
+        n_generations: 1,
+        quantiles: null,
+        params: ["a", "b", "c"].map((name) => ({ name, kind: "real" })),
+        observed: null,
+      },
+      { type: "generation_started", generation: 0, tolerance: null },
+      {
+        type: "generation_completed",
+        generation: 0,
+        stats,
+        particles,
+        trajectories: [],
+      },
+      { type: "run_finished", generations: 1 },
+    ];
+    await page.goto("/");
+    await page.getByLabel("Load run.jsonl").setInputFiles({
+      name: "pairs.jsonl",
+      mimeType: "application/jsonl",
+      buffer: Buffer.from(lines.map((l) => JSON.stringify(l)).join("\n")),
+    });
+    await expect(page.getByTestId("status")).toHaveText("Finished");
+
+    const section = page.getByTestId("correlations");
+    const charts = section.locator(".line-chart-wrapper");
+    // The first parameter against the other two, strongest first.
+    await expect(charts).toHaveCount(2);
+    await expect(charts.first()).toContainText("a ~ b: r = 1.00");
+
+    await section.getByRole("combobox", { name: "Sort" }).click();
+    await page.getByRole("option", { name: "Weakest |r| first" }).click();
+    await expect(charts.last()).toContainText("a ~ b: r = 1.00");
+
+    await section.getByRole("combobox", { name: "Parameter" }).click();
+    await page.getByRole("option", { name: "c", exact: true }).click();
+    await expect(charts).toHaveCount(2);
+    await expect(section).toContainText("c ~ a");
+    await expect(section).toContainText("c ~ b");
+    await expect(section).not.toContainText("a ~ b");
+  });
+
   test("chart tooltips name their series", async ({ page }) => {
     await page.goto("/");
     await page.getByLabel("Load run.jsonl").setInputFiles(fixture);

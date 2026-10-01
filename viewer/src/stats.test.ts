@@ -1,7 +1,9 @@
 import { describe, expect, it } from "vitest";
 import {
+  axisScale,
   parameterSummaries,
   quantileBands,
+  weightedCorrelation,
   weightedQuantiles,
   weightedSummary,
 } from "./stats";
@@ -74,5 +76,44 @@ describe("parameterSummaries", () => {
     ]);
     expect(a!.mean).toBeCloseTo(2);
     expect(b!.mean).toBeCloseTo(20);
+  });
+});
+
+describe("weightedCorrelation", () => {
+  it("is 1 and -1 on a line", () => {
+    expect(weightedCorrelation([1, 2, 3], [2, 4, 6], [1, 1, 1])).toBeCloseTo(1);
+    expect(weightedCorrelation([1, 2, 3], [6, 4, 2], [1, 1, 1])).toBeCloseTo(
+      -1,
+    );
+  });
+
+  it("follows the weights", () => {
+    // The off-line point carries almost no weight.
+    const r = weightedCorrelation([1, 2, 3, 2], [1, 2, 3, 9], [1, 1, 1, 1e-9]);
+    expect(r).toBeCloseTo(1, 5);
+    expect(
+      weightedCorrelation([1, 2, 3, 2], [1, 2, 3, 9], [1, 1, 1, 1]),
+    ).toBeLessThan(0.5);
+  });
+
+  it("is NaN when a parameter does not vary", () => {
+    expect(weightedCorrelation([1, 1, 1], [1, 2, 3], [1, 1, 1])).toBeNaN();
+    expect(weightedCorrelation([1], [1], [1])).toBeNaN();
+  });
+});
+
+describe("axisScale", () => {
+  it("leaves readable magnitudes alone", () => {
+    expect(axisScale("r0", 3.2)).toEqual({ factor: 1, label: "r0" });
+    expect(axisScale("n", 0)).toEqual({ factor: 1, label: "n" });
+  });
+
+  it("moves an extreme exponent into the label", () => {
+    const small = axisScale("decline", 3e-5);
+    expect(small.label).toBe("decline (×10⁻⁵)");
+    expect(3e-5 * small.factor).toBeCloseTo(3);
+    const large = axisScale("population", 2.5e6);
+    expect(large.label).toBe("population (×10⁶)");
+    expect(2.5e6 * large.factor).toBeCloseTo(2.5);
   });
 });

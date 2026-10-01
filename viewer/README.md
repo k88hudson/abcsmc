@@ -55,8 +55,9 @@ and the run's distance provides `Distance::observed`.
 - `src/sources.ts`: file drop, one-shot file read, and file-handle tailing.
 - `src/recent.ts`: remembers the last run in IndexedDB so the next visit
   reopens it (the file handle of a watched run, a saved copy of a loaded one).
-- `src/stats.ts`: weighted histogram, KDE, quantiles, and the per-parameter
-  summaries behind the Posteriors table.
+- `src/stats.ts`: weighted histogram, KDE, quantiles, the per-parameter
+  summaries behind the Posteriors table, and the weighted correlation behind
+  the pairwise scatters.
 - `src/ChartTip.vue`: the hover tooltip body shared by every chart, a heading
   plus one named row per series.
 - `src/App.vue`: the page, in tabs: Calibration, and Target data, Priors, and

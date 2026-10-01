@@ -28,10 +28,12 @@ import {
   tailHandle,
 } from "./sources";
 import {
+  axisScale,
   extent,
   normalizedWeights,
   parameterSummaries,
   quantileBands,
+  weightedCorrelation,
   weightedHistogram,
   weightedKde,
 } from "./stats";
@@ -71,6 +73,7 @@ function reset() {
   selectedGeneration.value = null;
   allGenerations.value = false;
   tab.value = "calibration";
+  correlationParam.value = undefined;
 }
 
 function onLines(lines: string[]) {
@@ -738,6 +741,124 @@ function trajectorySubtitle(g: TrajectoryView): string {
     : `${g.label}, ${accepted}`;
 }
 
+// ---- Pairwise parameter scatters
+
+// Dots drawn per cloud; the correlation always uses every particle.
+const MAX_SCATTER_DOTS = 500;
+
+// The parameter on every panel's x axis; unset means the first one.
+const correlationParam = ref<string | undefined>(undefined);
+const correlationSort = ref("strongest");
+
+const CORRELATION_SORTS = [
+  { value: "strongest", label: "Strongest |r| first" },
+  { value: "weakest", label: "Weakest |r| first" },
+  { value: "name", label: "By name" },
+];
+
+const correlationParamOptions = computed(() =>
+  run.params.map((p) => ({ value: p.name, label: p.name })),
+);
+
+// Index of the chosen parameter, falling back to the first.
+const correlationIndex = computed(() =>
+  Math.max(
+    0,
+    run.params.findIndex((p) => p.name === correlationParam.value),
+  ),
+);
+
+const correlationChoice = computed({
+  get: () => run.params[correlationIndex.value]?.name,
+  set: (value: string | undefined) => {
+    correlationParam.value = value;
+  },
+});
+
+function everyNth<T>(items: T[], limit: number): T[] {
+  if (items.length <= limit) return items;
+  const stride = items.length / limit;
+  return Array.from(
+    { length: limit },
+    (_, i) => items[Math.floor(i * stride)]!,
+  );
+}
+
+// The chosen parameter against each of the others for the shown generation,
+// the prior cloud behind it. Only these pairs are built, so a run with many
+// parameters does not draw every combination at once. Each dot is one particle, so a pair is read off the same
+// draw, which the marginal charts cannot show.
+const correlationPanels = computed(() => {
+  const g = shownGeneration.value;
+  const prior = completed.value[0];
+  if (!g || run.params.length < 2) return [];
+  const scales = paramRanges.value.map((r, i) =>
+    axisScale(run.params[i]!.name, Math.max(Math.abs(r.lo), Math.abs(r.hi))),
+  );
+  const cloud = (generation: Generation, i: number, j: number) => {
+    const isPrior = generation === prior;
+    const drawn = everyNth(generation.particles, MAX_SCATTER_DOTS);
+    return {
+      x: drawn.map((p) => p.params[i]! * scales[i]!.factor),
+      data: drawn.map((p) => p.params[j]! * scales[j]!.factor),
+      // A line through unsorted draws would mean nothing: dots only.
+      strokeWidth: 0,
+      dots: true,
+      dotRadius: isPrior ? 1.6 : 2.2,
+      opacity: isPrior ? 0.3 : 0.75,
+      color: isPrior ? palette.value.prior : palette.value.posterior,
+      legend: generationLabel(generation),
+      showInTooltip: false,
+    };
+  };
+  const weights = g.particles.map((p) => p.weight);
+  const panels = [];
+  const i = correlationIndex.value;
+  {
+    for (let j = 0; j < run.params.length; j++) {
+      if (j === i) continue;
+      const x = run.params[i]!.name;
+      const y = run.params[j]!.name;
+      const xs = g.particles.map((p) => p.params[i]!);
+      const ys = g.particles.map((p) => p.params[j]!);
+      const correlation = weightedCorrelation(xs, ys, weights);
+      const r = Number.isFinite(correlation) ? correlation.toFixed(2) : "–";
+      panels.push({
+        key: `${x}~${y}`,
+        x,
+        y,
+        xLabel: scales[i]!.label,
+        yLabel: scales[j]!.label,
+        correlation,
+        title: `${x} ~ ${y}: r = ${r} (${generationLabel(g)})`,
+        filename: fileStem(run.id, "correlation", generationLabel(g), x, y),
+        series:
+          prior && g !== prior
+            ? [cloud(prior, i, j), cloud(g, i, j)]
+            : [cloud(g, i, j)],
+        csv: () =>
+          columnsToCsv([
+            { header: x, values: xs },
+            { header: y, values: ys },
+            { header: "weight", values: weights },
+          ]),
+      });
+    }
+  }
+  return panels;
+});
+
+const shownCorrelationPanels = computed(() => {
+  const strength = (r: number) => (Number.isFinite(r) ? Math.abs(r) : 0);
+  const panels = [...correlationPanels.value];
+  if (correlationSort.value === "strongest")
+    panels.sort((a, b) => strength(b.correlation) - strength(a.correlation));
+  else if (correlationSort.value === "weakest")
+    panels.sort((a, b) => strength(a.correlation) - strength(b.correlation));
+  else panels.sort((a, b) => a.key.localeCompare(b.key));
+  return panels;
+});
+
 const overlays = computed(() => {
   const gens = completed.value;
   const n = gens.length;
@@ -1158,6 +1279,21 @@ function fmt(x: number, digits = 3): string {
           </div>
         </section>
 
+        <section v-if="summaryTable" data-testid="posteriors">
+          <h2>
+            Posteriors
+            <small
+              >{{ summaryTable.label }}, weighted mean, SD, and quantiles</small
+            >
+          </h2>
+          <DataTable
+            :data="summaryTable.data"
+            :column-config="summaryTable.columnConfig"
+            :filename="summaryTable.filename"
+            :csv="summaryTable.csv"
+          />
+        </section>
+
         <section
           v-if="trajectoryView && hasTrajectoryData"
           data-testid="trajectories"
@@ -1207,21 +1343,6 @@ function fmt(x: number, digits = 3): string {
               />
             </div>
           </div>
-        </section>
-
-        <section v-if="summaryTable" data-testid="posteriors">
-          <h2>
-            Posteriors
-            <small
-              >{{ summaryTable.label }}, weighted mean, SD, and quantiles</small
-            >
-          </h2>
-          <DataTable
-            :data="summaryTable.data"
-            :column-config="summaryTable.columnConfig"
-            :filename="summaryTable.filename"
-            :csv="summaryTable.csv"
-          />
         </section>
 
         <section v-if="completed.length" data-testid="overlays">
@@ -1351,6 +1472,62 @@ function fmt(x: number, digits = 3): string {
             </div>
           </div>
         </section>
+
+        <section v-if="correlationPanels.length" data-testid="correlations">
+          <h2>
+            Parameter correlations
+            <small v-if="shownGeneration"
+              >{{ generationLabel(shownGeneration) }}, weighted Pearson r</small
+            >
+          </h2>
+          <p class="muted">
+            The chosen parameter against each of the others. One dot per
+            particle, the prior behind in grey. A tilted cloud means the data
+            pins the two parameters' combination but not either one alone, which
+            the marginal charts cannot show.
+            <template
+              v-if="
+                shownGeneration &&
+                shownGeneration.particles.length > MAX_SCATTER_DOTS
+              "
+            >
+              {{ MAX_SCATTER_DOTS }} of
+              {{ shownGeneration.particles.length }} particles are drawn; r uses
+              all of them.
+            </template>
+          </p>
+          <div class="correlation-controls">
+            <SelectBox
+              v-model="correlationChoice"
+              :options="correlationParamOptions"
+              label="Parameter"
+            />
+            <SelectBox
+              v-if="correlationPanels.length > 1"
+              v-model="correlationSort"
+              :options="CORRELATION_SORTS"
+              label="Sort"
+            />
+          </div>
+          <div class="grid">
+            <div
+              v-for="panel in shownCorrelationPanels"
+              :key="panel.key"
+              class="cell"
+            >
+              <LineChart
+                :series="panel.series"
+                :height="280"
+                :x-label="panel.xLabel"
+                :y-label="panel.yLabel"
+                :filename="panel.filename"
+                :data-export-name="panel.filename"
+                :title="panel.title"
+                :csv="panel.csv"
+              />
+            </div>
+          </div>
+        </section>
       </div>
 
       <section
@@ -1473,6 +1650,10 @@ function fmt(x: number, digits = 3): string {
 .target-table {
   margin-top: 1rem;
 }
+.target-table :deep(.Table th),
+.target-table :deep(.Table td) {
+  padding-block: 0.3em;
+}
 .main > h1 {
   margin-top: 0;
 }
@@ -1490,6 +1671,16 @@ h4 small {
 .description {
   margin: 0 0 0.75rem;
   max-width: 80ch;
+}
+.correlation-controls {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem 1.5rem;
+  margin-bottom: 0.75rem;
+  font-size: 0.85rem;
+}
+.correlation-controls > * {
+  width: 16rem;
 }
 .trajectory-controls {
   display: flex;

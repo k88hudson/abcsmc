@@ -238,3 +238,64 @@ export function parameterSummaries(
     ),
   );
 }
+
+// Weighted Pearson correlation of two parameters over the same particles.
+// Weights need not be normalized. NaN when either parameter does not vary.
+export function weightedCorrelation(
+  xs: number[],
+  ys: number[],
+  weights: number[],
+): number {
+  let total = 0;
+  for (const w of weights) total += w;
+  if (xs.length < 2 || !(total > 0)) return NaN;
+  let meanX = 0;
+  let meanY = 0;
+  for (let i = 0; i < xs.length; i++) {
+    meanX += xs[i]! * weights[i]!;
+    meanY += ys[i]! * weights[i]!;
+  }
+  meanX /= total;
+  meanY /= total;
+  let sxx = 0;
+  let syy = 0;
+  let sxy = 0;
+  for (let i = 0; i < xs.length; i++) {
+    const dx = xs[i]! - meanX;
+    const dy = ys[i]! - meanY;
+    sxx += weights[i]! * dx * dx;
+    syy += weights[i]! * dy * dy;
+    sxy += weights[i]! * dx * dy;
+  }
+  const denominator = Math.sqrt(sxx * syy);
+  return denominator > 0 ? sxy / denominator : NaN;
+}
+
+const SUPERSCRIPTS: Record<string, string> = {
+  "-": "⁻",
+  "0": "⁰",
+  "1": "¹",
+  "2": "²",
+  "3": "³",
+  "4": "⁴",
+  "5": "⁵",
+  "6": "⁶",
+  "7": "⁷",
+  "8": "⁸",
+  "9": "⁹",
+};
+
+// A power of ten that brings values of magnitude `maxAbs` to a readable size,
+// and the axis label that carries the exponent, so a parameter living at 1e-5
+// does not have every tick rounded to "0.0". Magnitudes from 0.01 to under
+// 100,000 are left alone.
+export function axisScale(
+  name: string,
+  maxAbs: number,
+): { factor: number; label: string } {
+  const exponent =
+    maxAbs > 0 && Number.isFinite(maxAbs) ? Math.floor(Math.log10(maxAbs)) : 0;
+  if (exponent >= -2 && exponent <= 4) return { factor: 1, label: name };
+  const power = [...String(exponent)].map((c) => SUPERSCRIPTS[c] ?? c).join("");
+  return { factor: 10 ** -exponent, label: `${name} (×10${power})` };
+}
