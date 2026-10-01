@@ -188,17 +188,19 @@ pub fn sum_of_squares<A: Numeric, B: Numeric>(simulated: &[A], observed: &[B]) -
 
 /// [`l1`] divided by the length. Zero for empty series.
 pub fn mean_absolute_error<A: Numeric, B: Numeric>(simulated: &[A], observed: &[B]) -> f64 {
+    let total = l1(simulated, observed);
     match observed.len() {
         0 => 0.0,
-        n => l1(simulated, observed) / n as f64,
+        n => total / n as f64,
     }
 }
 
 /// Square root of the mean squared difference. Zero for empty series.
 pub fn root_mean_squared_error<A: Numeric, B: Numeric>(simulated: &[A], observed: &[B]) -> f64 {
+    let total = sum_of_squares(simulated, observed);
     match observed.len() {
         0 => 0.0,
-        n => (sum_of_squares(simulated, observed) / n as f64).sqrt(),
+        n => (total / n as f64).sqrt(),
     }
 }
 
@@ -317,5 +319,17 @@ mod test {
     #[should_panic(expected = "different lengths")]
     fn mismatched_lengths_panic() {
         l1(&[1.0, 2.0], &[1.0]);
+    }
+
+    #[test]
+    #[should_panic(expected = "different lengths")]
+    fn mean_absolute_error_against_an_empty_observation_panics() {
+        mean_absolute_error(&[1.0], &[0.0; 0]);
+    }
+
+    #[test]
+    #[should_panic(expected = "different lengths")]
+    fn root_mean_squared_error_against_an_empty_observation_panics() {
+        root_mean_squared_error(&[1.0], &[0.0; 0]);
     }
 }
