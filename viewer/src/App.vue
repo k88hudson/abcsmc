@@ -44,6 +44,7 @@ const showAccepted = ref(true);
 const showRejected = ref(true);
 const showObserved = ref(true);
 const allGenerations = ref(false);
+const facet = ref(false);
 const main = ref<HTMLElement | null>(null);
 const exporting = ref(false);
 const yScaleType = computed(() => (logScale.value ? "log" : "linear"));
@@ -338,19 +339,14 @@ interface TrajectoryView {
   rejected: { name: string; values: number[] }[];
 }
 
-// What the trajectories chart draws: the shown generation, or every completed
-// generation together.
-const trajectoryView = computed<TrajectoryView | null>(() => {
-  const gens = allGenerations.value
-    ? completed.value
-    : shownGeneration.value
-      ? [shownGeneration.value]
-      : [];
-  if (gens.length === 0) return null;
-  const prefix = (g: Generation) =>
-    allGenerations.value ? `gen_${g.generation}_` : "";
+function trajectoryViewOf(
+  gens: Generation[],
+  label: string,
+  prefixed: boolean,
+): TrajectoryView {
+  const prefix = (g: Generation) => (prefixed ? `gen_${g.generation}_` : "");
   return {
-    label: allGenerations.value ? "All generations" : generationLabel(gens[0]!),
+    label,
     nParticles: gens.reduce((n, g) => n + g.particles.length, 0),
     trajectories: gens.flatMap((g) =>
       g.trajectories.map((t) => ({
@@ -365,6 +361,40 @@ const trajectoryView = computed<TrajectoryView | null>(() => {
       })),
     ),
   };
+}
+
+// Everything the trajectories section draws: the shown generation, or every
+// completed generation together.
+const trajectoryView = computed<TrajectoryView | null>(() => {
+  if (allGenerations.value)
+    return completed.value.length > 0
+      ? trajectoryViewOf(completed.value, "All generations", true)
+      : null;
+  const g = shownGeneration.value;
+  return g ? trajectoryViewOf([g], generationLabel(g), false) : null;
+});
+
+// One chart per view: all of it, or one generation each when faceted.
+const trajectoryCharts = computed(() => {
+  const all = trajectoryView.value;
+  if (!all) return [];
+  const views =
+    allGenerations.value && facet.value
+      ? completed.value.map((g) =>
+          trajectoryViewOf([g], generationLabel(g), false),
+        )
+      : [all];
+  return views.map((view) => ({
+    key: view.label,
+    series: trajectorySeries(view),
+    ...trajectoryDownload(view),
+    // Facets are narrow, so their titles are short.
+    ...(views.length > 1
+      ? {
+          title: `${view.label}: ${view.trajectories.length} accepted, ${view.rejected.length} rejected`,
+        }
+      : {}),
+  }));
 });
 
 const ALL_GENERATIONS = "all";
@@ -373,7 +403,8 @@ const generationOptions = computed(() => [
   { value: ALL_GENERATIONS, label: "All generations" },
   ...completed.value.map((g) => ({
     value: String(g.generation),
-    label: generationLabel(g),
+    label:
+      generationLabel(g) === "Prior" ? "Prior" : `Generation ${g.generation}`,
   })),
 ]);
 
@@ -389,8 +420,9 @@ const generationChoice = computed({
   },
 });
 
-// The extent of everything the trajectories chart can show. The legend's key
-// series span it, so the axes stay put as series are turned off and on.
+// The extent of everything the trajectories section can show. The legend's
+// key series span it, so the axes stay put as series are turned off and on,
+// and facets share them.
 const trajectoryFrame = computed(() => {
   const g = trajectoryView.value;
   const all: number[][] = [];
@@ -411,8 +443,7 @@ const trajectoryFrame = computed(() => {
   return yMin <= yMax ? { xMax, yMin, yMax } : null;
 });
 
-const trajectorySeries = computed(() => {
-  const g = trajectoryView.value;
+function trajectorySeries(g: TrajectoryView) {
   const series: {
     x: number[];
     data: number[];
@@ -439,7 +470,7 @@ const trajectorySeries = computed(() => {
     }
   }
   // Rejected first, so accepted trajectories draw over them.
-  if (g && showRejected.value) {
+  if (showRejected.value) {
     for (const t of g.rejected) {
       series.push({
         x: t.values.map((_, i) => i),
@@ -451,7 +482,7 @@ const trajectorySeries = computed(() => {
       });
     }
   }
-  if (g && showAccepted.value) {
+  if (showAccepted.value) {
     for (const t of g.trajectories) {
       series.push({
         x: t.values.map((_, i) => i),
@@ -473,7 +504,7 @@ const trajectorySeries = computed(() => {
     });
   }
   return series;
-});
+}
 
 // Whether the section has anything to draw, whatever the toggles say, so
 // turning both off does not hide the toggles.
@@ -515,7 +546,7 @@ function solid(color: string): string {
   return color.replace(/rgba\(([^)]*),[^,)]*\)/, "rgb($1)");
 }
 
-// The chart's legend is plain svg, so clicks are matched to its labels by
+// The charts' legend is plain svg, so clicks are matched to its labels by
 // position: the label text plus the swatch to its left.
 const trajectoryChart = ref<HTMLElement | null>(null);
 
@@ -556,7 +587,7 @@ function onLegendHover(event: MouseEvent) {
 // Strike through the labels of hidden items. Set on the elements so exported
 // images show it too.
 watch(
-  [trajectorySeries, trajectoryChart],
+  [trajectoryCharts, trajectoryChart],
   () => {
     for (const text of legendLabels()) {
       const label = text.textContent!.trim();
@@ -569,17 +600,16 @@ watch(
   { flush: "post" },
 );
 
-const trajectoryDownload = computed(() => {
-  const g = trajectoryView.value;
+function trajectoryDownload(g: TrajectoryView) {
   const observed = showObserved.value ? run.observed : null;
-  const trajectories = showAccepted.value ? (g?.trajectories ?? []) : [];
-  const rejected = showRejected.value ? (g?.rejected ?? []) : [];
+  const trajectories = showAccepted.value ? g.trajectories : [];
+  const rejected = showRejected.value ? g.rejected : [];
   let length = observed?.length ?? 0;
   for (const t of trajectories) length = Math.max(length, t.values.length);
   for (const t of rejected) length = Math.max(length, t.values.length);
   return {
-    title: g ? `Trajectories: ${trajectorySubtitle(g)}` : "Trajectories",
-    filename: fileStem(run.id, "trajectories", g?.label),
+    title: `Trajectories: ${trajectorySubtitle(g)}`,
+    filename: fileStem(run.id, "trajectories", g.label),
     csv: () =>
       columnsToCsv([
         { header: "index", values: Array.from({ length }, (_, i) => i) },
@@ -594,7 +624,7 @@ const trajectoryDownload = computed(() => {
         })),
       ]),
   };
-});
+}
 
 function trajectorySubtitle(g: TrajectoryView): string {
   const accepted = `${g.trajectories.length} of ${g.nParticles} accepted particles`;
@@ -1044,29 +1074,40 @@ function fmt(x: number, digits = 3): string {
           Trajectories
           <small>{{ trajectorySubtitle(trajectoryView) }}</small>
         </h2>
-        <SelectBox
-          v-model="generationChoice"
-          :options="generationOptions"
-          label="Generation"
-          class="generation-select"
-        />
+        <div class="trajectory-controls">
+          <SelectBox
+            v-model="generationChoice"
+            :options="generationOptions"
+            label="Generation"
+            hide-label
+            class="generation-select"
+          />
+          <Toggle
+            v-if="allGenerations"
+            v-model="facet"
+            label="Facet by generation"
+          />
+        </div>
         <p class="muted legend-hint">Click a legend item to hide or show it.</p>
         <div
           ref="trajectoryChart"
+          :class="{ grid: trajectoryCharts.length > 1 }"
           @click="onLegendClick"
           @mousemove="onLegendHover"
         >
-          <LineChart
-            :series="trajectorySeries"
-            :height="260"
-            x-label="Index"
-            y-label="Value"
-            :y-scale-type="yScaleType"
-            :filename="trajectoryDownload.filename"
-            :data-export-name="trajectoryDownload.filename"
-            :title="trajectoryDownload.title"
-            :csv="trajectoryDownload.csv"
-          />
+          <div v-for="chart in trajectoryCharts" :key="chart.key" class="cell">
+            <LineChart
+              :series="chart.series"
+              :height="trajectoryCharts.length > 1 ? 220 : 260"
+              x-label="Index"
+              y-label="Value"
+              :y-scale-type="yScaleType"
+              :filename="chart.filename"
+              :data-export-name="chart.filename"
+              :title="chart.title"
+              :csv="chart.csv"
+            />
+          </div>
         </div>
       </section>
 
@@ -1282,9 +1323,16 @@ h4 small {
   margin: 0 0 0.75rem;
   max-width: 80ch;
 }
-.generation-select {
-  max-width: 16rem;
+.trajectory-controls {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem 1.5rem;
   margin-bottom: 0.5rem;
+  font-size: 0.85rem;
+}
+.generation-select {
+  width: 16rem;
 }
 .legend-hint {
   margin: 0 0 0.25rem;

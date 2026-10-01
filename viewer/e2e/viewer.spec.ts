@@ -100,9 +100,25 @@ test("the generation selector shows one generation or all of them", async ({
     "All generations, 100 of 500 accepted particles, 80 rejected simulations",
   );
 
+  // Faceted, each generation gets its own chart on shared axes.
+  const charts = section.locator(".line-chart-wrapper");
+  await expect(charts).toHaveCount(1);
+  await section.getByText("Facet by generation").click();
+  await expect(charts).toHaveCount(5);
+  await expect(charts.first()).toContainText("Prior: 20 accepted, 0 rejected");
+  const ticks = (i: number) =>
+    charts
+      .nth(i)
+      .locator("svg text")
+      .filter({ hasText: /^[\d,.]+$/ })
+      .allTextContents();
+  expect(await ticks(0)).toEqual(await ticks(4));
+
   await section.getByRole("combobox", { name: "Generation" }).click();
-  await page.getByRole("option", { name: "Gen 2" }).click();
+  await page.getByRole("option", { name: "Generation 2" }).click();
   await expect(subtitle).toContainText("Gen 2, 20 of 100");
+  await expect(charts).toHaveCount(1);
+  await expect(section.getByText("Facet by generation")).toHaveCount(0);
   await expect(page.locator(".gen-table tbody tr.selected")).toContainText("2");
 
   // Picking a generation elsewhere leaves "All generations".
