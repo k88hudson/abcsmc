@@ -31,6 +31,12 @@ test("loads a finished run from a file and renders every generation", async ({
   await expect(posteriors).toContainText("Gen 4");
   await expect(posteriors.locator("tbody tr")).toHaveCount(2);
   await expect(posteriors.locator("tbody tr").first()).toContainText("r0");
+  await expect(posteriors.locator("tbody tr").first()).toContainText(
+    "Exponential(rate = 1)",
+  );
+  await expect(page.getByTestId("priors")).toContainText(
+    "DiscreteUniform(a = 1, b = 4)",
+  );
   await expect(page.getByTestId("projections")).toContainText("baseline");
   await expect(page.getByTestId("projections")).toContainText("20 particles");
   await expect(page.getByTestId("cells").locator(".gen-cell")).toHaveCount(5);

@@ -4,9 +4,22 @@
 
 export type ParamKind = "real" | "int";
 
+// A prior as logged: its family under `type`, then its parameters by name.
+export type PriorSpec = { type: string } & Record<string, number | string>;
+
 export interface ParamMeta {
   name: string;
   kind: ParamKind;
+  // Absent in logs written before priors were logged.
+  prior?: PriorSpec;
+}
+
+// `Family(name = value, ...)`, such as `Uniform(a = 0.5, b = 3)`.
+export function priorLabel(prior: PriorSpec): string {
+  const fields = Object.entries(prior)
+    .filter(([name]) => name !== "type")
+    .map(([name, value]) => `${name} = ${value}`);
+  return `${prior.type}(${fields.join(", ")})`;
 }
 
 export interface GenerationStats {

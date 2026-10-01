@@ -12,6 +12,8 @@ use rand::Rng;
 use rand_distr::Distribution as _;
 use statrs::distribution::{Continuous, Discrete};
 
+use crate::param::Value;
+
 /// A prior's parameters were outside the family's valid range.
 #[derive(Clone, Debug, PartialEq)]
 pub struct PriorError {
@@ -36,6 +38,78 @@ impl fmt::Display for PriorError {
 
 impl std::error::Error for PriorError {}
 
+/// The family and parameters a prior was declared with, kept alongside the
+/// backing distributions so a prior can be printed and serialized.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct Declared {
+    family: &'static str,
+    fields: [Option<(&'static str, Value)>; 4],
+}
+
+impl Declared {
+    fn new<const N: usize>(family: &'static str, given: [(&'static str, Value); N]) -> Self {
+        let mut fields = [None; 4];
+        for (slot, field) in fields.iter_mut().zip(given) {
+            *slot = Some(field);
+        }
+        Declared { family, fields }
+    }
+
+    pub(crate) fn family(&self) -> &'static str {
+        self.family
+    }
+
+    pub(crate) fn parameters(&self) -> impl Iterator<Item = (&'static str, Value)> + '_ {
+        self.fields.iter().flatten().copied()
+    }
+}
+
+/// `Family(name = value, ...)`, such as `Uniform(a = 0.5, b = 3)`.
+impl fmt::Display for Declared {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}(", self.family)?;
+        for (i, (name, value)) in self.parameters().enumerate() {
+            if i > 0 {
+                write!(f, ", ")?;
+            }
+            match value {
+                Value::Real(x) => write!(f, "{name} = {x}")?,
+                Value::Int(k) => write!(f, "{name} = {k}")?,
+            }
+        }
+        write!(f, ")")
+    }
+}
+
+macro_rules! declared_accessors {
+    ($prior:ident) => {
+        impl $prior {
+            /// The family name, such as `"Uniform"`.
+            pub fn family(&self) -> &'static str {
+                self.1.family()
+            }
+
+            /// The parameters the prior was declared with, by name.
+            pub fn parameters(&self) -> impl Iterator<Item = (&'static str, Value)> + '_ {
+                self.1.parameters()
+            }
+
+            pub(crate) fn declared(&self) -> &Declared {
+                &self.1
+            }
+        }
+
+        impl fmt::Display for $prior {
+            fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+                self.1.fmt(f)
+            }
+        }
+    };
+}
+
+declared_accessors!(RealPrior);
+declared_accessors!(IntPrior);
+
 #[derive(Clone, Copy, Debug)]
 enum Real {
     Uniform(rand_distr::Uniform<f64>, statrs::distribution::Uniform),
@@ -56,7 +130,7 @@ enum Real {
 ///
 /// [`define_priors!`]: crate::define_priors
 #[derive(Clone, Copy, Debug)]
-pub struct RealPrior(Real);
+pub struct RealPrior(Real, Declared);
 
 impl RealPrior {
     /// Uniform on `[a, b)`.
@@ -64,7 +138,10 @@ impl RealPrior {
         let sampler = rand_distr::Uniform::new(a, b).map_err(|e| PriorError::new("Uniform", e))?;
         let density =
             statrs::distribution::Uniform::new(a, b).map_err(|e| PriorError::new("Uniform", e))?;
-        Ok(RealPrior(Real::Uniform(sampler, density)))
+        Ok(RealPrior(
+            Real::Uniform(sampler, density),
+            Declared::new("Uniform", [("a", a.into()), ("b", b.into())]),
+        ))
     }
 
     pub fn normal(mean: f64, std_dev: f64) -> Result<Self, PriorError> {
@@ -72,7 +149,13 @@ impl RealPrior {
             rand_distr::Normal::new(mean, std_dev).map_err(|e| PriorError::new("Normal", e))?;
         let density = statrs::distribution::Normal::new(mean, std_dev)
             .map_err(|e| PriorError::new("Normal", e))?;
-        Ok(RealPrior(Real::Normal(sampler, density)))
+        Ok(RealPrior(
+            Real::Normal(sampler, density),
+            Declared::new(
+                "Normal",
+                [("mean", mean.into()), ("std_dev", std_dev.into())],
+            ),
+        ))
     }
 
     /// Exponential with the given rate (mean `1 / rate`).
@@ -80,7 +163,10 @@ impl RealPrior {
         let sampler = rand_distr::Exp::new(rate).map_err(|e| PriorError::new("Exponential", e))?;
         let density =
             statrs::distribution::Exp::new(rate).map_err(|e| PriorError::new("Exponential", e))?;
-        Ok(RealPrior(Real::Exponential(sampler, density)))
+        Ok(RealPrior(
+            Real::Exponential(sampler, density),
+            Declared::new("Exponential", [("rate", rate.into())]),
+        ))
     }
 
     /// Log-normal: `ln(x) ~ Normal(mu, sigma)`.
@@ -89,7 +175,10 @@ impl RealPrior {
             rand_distr::LogNormal::new(mu, sigma).map_err(|e| PriorError::new("LogNormal", e))?;
         let density = statrs::distribution::LogNormal::new(mu, sigma)
             .map_err(|e| PriorError::new("LogNormal", e))?;
-        Ok(RealPrior(Real::LogNormal(sampler, density)))
+        Ok(RealPrior(
+            Real::LogNormal(sampler, density),
+            Declared::new("LogNormal", [("mu", mu.into()), ("sigma", sigma.into())]),
+        ))
     }
 
     /// Gamma with the given shape and scale (mean `shape * scale`).
@@ -99,7 +188,10 @@ impl RealPrior {
         // statrs parameterizes by rate.
         let density = statrs::distribution::Gamma::new(shape, 1.0 / scale)
             .map_err(|e| PriorError::new("Gamma", e))?;
-        Ok(RealPrior(Real::Gamma(sampler, density)))
+        Ok(RealPrior(
+            Real::Gamma(sampler, density),
+            Declared::new("Gamma", [("shape", shape.into()), ("scale", scale.into())]),
+        ))
     }
 
     pub fn weibull(shape: f64, scale: f64) -> Result<Self, PriorError> {
@@ -108,7 +200,13 @@ impl RealPrior {
             rand_distr::Weibull::new(scale, shape).map_err(|e| PriorError::new("Weibull", e))?;
         let density = statrs::distribution::Weibull::new(shape, scale)
             .map_err(|e| PriorError::new("Weibull", e))?;
-        Ok(RealPrior(Real::Weibull(sampler, density)))
+        Ok(RealPrior(
+            Real::Weibull(sampler, density),
+            Declared::new(
+                "Weibull",
+                [("shape", shape.into()), ("scale", scale.into())],
+            ),
+        ))
     }
 
     /// Beta on `[0, 1]`.
@@ -127,7 +225,18 @@ impl RealPrior {
         let sampler = rand_distr::Beta::new(alpha, beta).map_err(|e| PriorError::new("Beta", e))?;
         let density =
             statrs::distribution::Beta::new(alpha, beta).map_err(|e| PriorError::new("Beta", e))?;
-        Ok(RealPrior(Real::Beta(sampler, density, min, max - min)))
+        Ok(RealPrior(
+            Real::Beta(sampler, density, min, max - min),
+            Declared::new(
+                "Beta",
+                [
+                    ("alpha", alpha.into()),
+                    ("beta", beta.into()),
+                    ("min", min.into()),
+                    ("max", max.into()),
+                ],
+            ),
+        ))
     }
 
     pub(crate) fn sample(&self, rng: &mut impl Rng) -> f64 {
@@ -174,7 +283,7 @@ enum Int {
 
 /// A prior over an integer-valued parameter.
 #[derive(Clone, Copy, Debug)]
-pub struct IntPrior(Int);
+pub struct IntPrior(Int, Declared);
 
 impl IntPrior {
     /// Uniform on the **inclusive** range `[a, b]`.
@@ -183,7 +292,10 @@ impl IntPrior {
             .map_err(|e| PriorError::new("DiscreteUniform", e))?;
         let density = statrs::distribution::DiscreteUniform::new(a, b)
             .map_err(|e| PriorError::new("DiscreteUniform", e))?;
-        Ok(IntPrior(Int::DiscreteUniform(sampler, density)))
+        Ok(IntPrior(
+            Int::DiscreteUniform(sampler, density),
+            Declared::new("DiscreteUniform", [("a", a.into()), ("b", b.into())]),
+        ))
     }
 
     pub fn poisson(lambda: f64) -> Result<Self, PriorError> {
@@ -191,7 +303,10 @@ impl IntPrior {
             rand_distr::Poisson::new(lambda).map_err(|e| PriorError::new("Poisson", e))?;
         let density = statrs::distribution::Poisson::new(lambda)
             .map_err(|e| PriorError::new("Poisson", e))?;
-        Ok(IntPrior(Int::Poisson(sampler, density)))
+        Ok(IntPrior(
+            Int::Poisson(sampler, density),
+            Declared::new("Poisson", [("lambda", lambda.into())]),
+        ))
     }
 
     /// Binomial with `n` trials of success probability `p`.
@@ -201,7 +316,10 @@ impl IntPrior {
         // statrs takes (p, n).
         let density = statrs::distribution::Binomial::new(p, n)
             .map_err(|e| PriorError::new("Binomial", e))?;
-        Ok(IntPrior(Int::Binomial(sampler, density)))
+        Ok(IntPrior(
+            Int::Binomial(sampler, density),
+            Declared::new("Binomial", [("n", Value::Int(n as i64)), ("p", p.into())]),
+        ))
     }
 
     /// Negative binomial counting failures before `r` successes of probability
@@ -218,7 +336,10 @@ impl IntPrior {
             .map_err(|e| PriorError::new("NegativeBinomial", e))?;
         let density = statrs::distribution::NegativeBinomial::new(r, p)
             .map_err(|e| PriorError::new("NegativeBinomial", e))?;
-        Ok(IntPrior(Int::NegativeBinomial(sampler, density)))
+        Ok(IntPrior(
+            Int::NegativeBinomial(sampler, density),
+            Declared::new("NegativeBinomial", [("r", r.into()), ("p", p.into())]),
+        ))
     }
 
     pub(crate) fn sample(&self, rng: &mut impl Rng) -> i64 {
@@ -253,9 +374,12 @@ fn non_negative(k: i64) -> Option<u64> {
     u64::try_from(k).ok()
 }
 
-/// With the `serde` feature, priors deserialize from a type-tagged document
-/// such as `{ "type": "Uniform", "a": 1.0, "b": 3.5 }`, so a config file can
-/// declare them without any code-level wrapper. Field names per family:
+/// With the `serde` feature, priors serialize to and deserialize from a
+/// type-tagged document such as `{ "type": "Uniform", "a": 1.0, "b": 3.5 }`,
+/// so a config file can declare them without any code-level wrapper. A prior
+/// is written with the parameterization its constructor takes (`rate` for
+/// the exponential, `scale` for gamma, `min` and `max` always for beta).
+/// Field names per family:
 ///
 /// | `type` | fields |
 /// |---|---|
@@ -271,12 +395,41 @@ fn non_negative(k: i64) -> Option<u64> {
 /// | `Binomial` | `n`, `p` |
 /// | `NegativeBinomial` | `r`, `p` |
 #[cfg(feature = "serde")]
-mod wire {
-    use super::{IntPrior, PriorError, RealPrior};
+pub(crate) mod wire {
+    use serde::ser::SerializeMap;
+
+    use super::{Declared, IntPrior, PriorError, RealPrior};
+    use crate::param::Value;
+
+    impl serde::Serialize for Declared {
+        fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+            let mut map = serializer.serialize_map(None)?;
+            map.serialize_entry("type", self.family())?;
+            for (name, value) in self.parameters() {
+                match value {
+                    Value::Real(x) => map.serialize_entry(name, &x)?,
+                    Value::Int(k) => map.serialize_entry(name, &k)?,
+                }
+            }
+            map.end()
+        }
+    }
+
+    impl serde::Serialize for RealPrior {
+        fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+            self.declared().serialize(serializer)
+        }
+    }
+
+    impl serde::Serialize for IntPrior {
+        fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+            self.declared().serialize(serializer)
+        }
+    }
 
     #[derive(serde::Deserialize)]
     #[serde(tag = "type")]
-    enum RealRepr {
+    pub(crate) enum RealRepr {
         Uniform {
             a: f64,
             b: f64,
@@ -314,7 +467,7 @@ mod wire {
 
     #[derive(serde::Deserialize)]
     #[serde(tag = "type")]
-    enum IntRepr {
+    pub(crate) enum IntRepr {
         DiscreteUniform { a: i64, b: i64 },
         Poisson { lambda: f64 },
         Binomial { n: u64, p: f64 },
@@ -519,6 +672,21 @@ mod tests {
         assert!(err.starts_with("Uniform prior:"), "{err}");
     }
 
+    #[test]
+    fn priors_print_their_family_and_parameters() {
+        assert_eq!(
+            RealPrior::uniform(0.5, 3.0).unwrap().to_string(),
+            "Uniform(a = 0.5, b = 3)"
+        );
+        assert_eq!(
+            IntPrior::binomial(4, 0.5).unwrap().to_string(),
+            "Binomial(n = 4, p = 0.5)"
+        );
+        let beta = RealPrior::beta(2.0, 5.0).unwrap();
+        assert_eq!(beta.family(), "Beta");
+        assert_eq!(beta.parameters().count(), 4);
+    }
+
     #[cfg(feature = "serde")]
     mod serde {
         use super::*;
@@ -565,6 +733,43 @@ mod tests {
             let nb: IntPrior =
                 serde_json::from_str(r#"{"type":"NegativeBinomial","r":3.0,"p":0.4}"#).unwrap();
             assert!(close(nb.density(0), 0.4f64.powi(3)));
+        }
+
+        #[test]
+        fn serializes_to_the_documents_it_reads() {
+            let priors = [
+                RealPrior::uniform(0.02, 2.2).unwrap(),
+                RealPrior::normal(1.0, 2.0).unwrap(),
+                RealPrior::exponential(2.0).unwrap(),
+                RealPrior::log_normal(0.0, 1.0).unwrap(),
+                RealPrior::gamma(2.0, 3.0).unwrap(),
+                RealPrior::weibull(2.0, 3.0).unwrap(),
+                RealPrior::scaled_beta(2.0, 5.0, 1.0, 3.0).unwrap(),
+            ];
+            for prior in priors {
+                let json = serde_json::to_string(&prior).unwrap();
+                let back: RealPrior = serde_json::from_str(&json).unwrap();
+                assert_eq!(back.declared(), prior.declared(), "{json}");
+            }
+            let priors = [
+                IntPrior::discrete_uniform(0, 215).unwrap(),
+                IntPrior::poisson(3.0).unwrap(),
+                IntPrior::binomial(4, 0.5).unwrap(),
+                IntPrior::negative_binomial(3.0, 0.4).unwrap(),
+            ];
+            for prior in priors {
+                let json = serde_json::to_string(&prior).unwrap();
+                let back: IntPrior = serde_json::from_str(&json).unwrap();
+                assert_eq!(back.declared(), prior.declared(), "{json}");
+            }
+            assert_eq!(
+                serde_json::to_string(&RealPrior::uniform(0.5, 3.0).unwrap()).unwrap(),
+                r#"{"type":"Uniform","a":0.5,"b":3.0}"#
+            );
+            assert_eq!(
+                serde_json::to_string(&IntPrior::discrete_uniform(1, 4).unwrap()).unwrap(),
+                r#"{"type":"DiscreteUniform","a":1,"b":4}"#
+            );
         }
 
         #[test]

@@ -14,6 +14,18 @@ impl Value {
     }
 }
 
+impl From<f64> for Value {
+    fn from(x: f64) -> Self {
+        Value::Real(x)
+    }
+}
+
+impl From<i64> for Value {
+    fn from(k: i64) -> Self {
+        Value::Int(k)
+    }
+}
+
 /// A particle's parameter vector, in the order the priors were declared.
 ///
 /// Read individual parameters in `CalibrationModel::simulate` with [`Params::real`] /

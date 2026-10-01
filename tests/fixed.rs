@@ -332,6 +332,7 @@ fn jsonl_log_records_the_whole_run() {
     );
     assert_eq!(started[0]["params"][0]["name"], "param_0");
     assert_eq!(started[0]["params"][0]["kind"], "real");
+    assert!(started[0]["params"][0]["prior"]["type"].is_string());
     assert_eq!(started[0]["observed"], serde_json::json!([5.0, 5.0]));
 
     let gen_started = of_type("generation_started");

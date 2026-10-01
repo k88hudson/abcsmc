@@ -10,7 +10,7 @@ use std::sync::Mutex;
 use std::time::Duration;
 
 use crate::platform::{Bar, Instant};
-use crate::{CalibrationModel, Distance, Draw, Generation, Params, Value};
+use crate::{CalibrationModel, Distance, Draw, Generation, ParamPrior, Params, Value};
 
 /// What a run declares before its first generation.
 #[derive(Clone, Debug)]
@@ -33,6 +33,9 @@ pub struct RunMeta {
 pub struct ParamMeta {
     pub name: String,
     pub real: bool,
+    /// The parameter's prior; `None` only when read from a log that predates
+    /// logged priors.
+    pub prior: Option<ParamPrior>,
 }
 
 impl RunMeta {
@@ -45,13 +48,16 @@ impl RunMeta {
         quantiles: Option<&[f64]>,
     ) -> Self {
         let priors = model.priors();
-        let params = (0..priors.len())
-            .map(|i| ParamMeta {
+        let params = priors
+            .iter()
+            .enumerate()
+            .map(|(i, prior)| ParamMeta {
                 name: <M::Draw as Draw>::NAMES
                     .get(i)
                     .map(|name| (*name).to_string())
                     .unwrap_or_else(|| format!("param_{i}")),
                 real: priors.is_real(i),
+                prior: Some(*prior),
             })
             .collect();
         RunMeta {
@@ -202,8 +208,9 @@ impl<M: CalibrationModel> RunObserver<M> for StdoutObserver {
 ///
 /// - `run_started`: `version`, `id`, `description` and
 ///   `distance_description` (each a string or `null`), `n_particles`, `n_generations`,
-///   `quantiles` (or `null`), `params` (`[{name, kind}]`, kind `real` or
-///   `int`), `observed` (or `null`).
+///   `quantiles` (or `null`), `params` (`[{name, kind, prior}]`, kind `real`
+///   or `int`, prior a type-tagged document such as
+///   `{"type":"Uniform","a":0.5,"b":3.0}`), `observed` (or `null`).
 /// - `generation_started`: `generation`, `tolerance` (`null` when infinite).
 /// - `progress`: `generation`, running `accepted` and `attempts` counts, and
 ///   `batch`, the `{params, distance}` of every particle accepted since the
@@ -339,6 +346,10 @@ impl<M: CalibrationModel> RunObserver<M> for JsonlObserver {
             push_str(&mut line, &param.name);
             line.push_str(r#","kind":"#);
             push_str(&mut line, if param.real { "real" } else { "int" });
+            if let Some(prior) = &param.prior {
+                line.push_str(r#","prior":"#);
+                push_prior(&mut line, prior);
+            }
             line.push('}');
         }
         line.push_str(r#"],"observed":"#);
@@ -490,16 +501,32 @@ fn push_opt_str(out: &mut String, s: Option<&str>) {
     }
 }
 
+fn push_prior(out: &mut String, prior: &ParamPrior) {
+    out.push_str(r#"{"type":"#);
+    push_str(out, prior.family());
+    for (name, value) in prior.parameters() {
+        out.push(',');
+        push_str(out, name);
+        out.push(':');
+        push_value(out, value);
+    }
+    out.push('}');
+}
+
+fn push_value(out: &mut String, value: Value) {
+    match value {
+        Value::Real(x) => push_f64(out, x),
+        Value::Int(k) => out.push_str(&k.to_string()),
+    }
+}
+
 fn push_params(out: &mut String, params: &Params) {
     out.push('[');
     for (i, value) in params.values().iter().enumerate() {
         if i > 0 {
             out.push(',');
         }
-        match *value {
-            Value::Real(x) => push_f64(out, x),
-            Value::Int(k) => out.push_str(&k.to_string()),
-        }
+        push_value(out, *value);
     }
     out.push(']');
 }

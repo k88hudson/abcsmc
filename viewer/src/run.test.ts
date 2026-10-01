@@ -5,6 +5,7 @@ import {
   completedGenerations,
   currentGeneration,
   emptyRun,
+  priorLabel,
 } from "./run";
 
 const started = JSON.stringify({
@@ -185,5 +186,16 @@ describe("projections", () => {
     expect(s.status).toBe("finished");
     expect(s.projections.map((p) => p.label)).toEqual(["baseline", "control"]);
     expect(s.projections[0]!.trajectories[0]!.values).toEqual([3, null]);
+  });
+});
+
+describe("priorLabel", () => {
+  it("prints the family and its parameters by name", () => {
+    expect(priorLabel({ type: "Uniform", a: 0.5, b: 3 })).toBe(
+      "Uniform(a = 0.5, b = 3)",
+    );
+    expect(priorLabel({ type: "Exponential", rate: 1 })).toBe(
+      "Exponential(rate = 1)",
+    );
   });
 });

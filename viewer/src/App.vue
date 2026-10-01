@@ -10,6 +10,7 @@ import {
   completedGenerations,
   currentGeneration,
   emptyRun,
+  priorLabel,
   type Generation,
   type RunState,
 } from "./run";
@@ -422,6 +423,23 @@ const overlays = computed(() => {
   });
 });
 
+const priorsTable = computed(() => {
+  if (!run.params.some((p) => p.prior)) return null;
+  return {
+    data: {
+      parameter: run.params.map((p) => p.name),
+      kind: run.params.map((p) => p.kind),
+      prior: run.params.map((p) => (p.prior ? priorLabel(p.prior) : "")),
+    },
+    columnConfig: {
+      parameter: { label: "Parameter" },
+      kind: { label: "Kind", width: "small" as const },
+      prior: { label: "Prior", width: "large" as const },
+    },
+    filename: fileStem(run.id, "priors"),
+  };
+});
+
 const SUMMARY_LABELS: Record<(typeof SUMMARY_COLUMNS)[number], string> = {
   mean: "Mean",
   sd: "SD",
@@ -439,19 +457,22 @@ const summaryTable = computed(() => {
   const summaries = parameterSummaries(run.params.length, g.particles);
   const names = run.params.map((p) => p.name);
   const data: Record<string, (string | number)[]> = { parameter: names };
+  if (run.params.some((p) => p.prior))
+    data.prior = run.params.map((p) => (p.prior ? priorLabel(p.prior) : ""));
   for (const key of SUMMARY_COLUMNS) data[key] = summaries.map((s) => s[key]);
   return {
     label: generationLabel(g),
     data,
     columnConfig: {
       parameter: { label: "Parameter" },
+      prior: { label: "Prior", width: 220 },
       ...Object.fromEntries(
         SUMMARY_COLUMNS.map((key) => [
           key,
           {
             label: SUMMARY_LABELS[key],
             align: "right" as const,
-            width: "small" as const,
+            width: 72,
             format: (v: string | number | boolean) => fmt(Number(v)),
           },
         ]),
@@ -497,7 +518,7 @@ const cells = computed(() => {
             param.kind === "real" ? kdeOverlay(i, g.particles, weights) : null,
           title:
             g === prior
-              ? `${param.name}: prior`
+              ? `${param.name}: prior${param.prior ? ` ${priorLabel(param.prior)}` : ""}`
               : `${param.name}: prior and ${generationLabel(g)} posterior`,
           filename: fileStem(run.id, generationLabel(g), param.name),
           csv: () =>
@@ -726,6 +747,15 @@ function fmt(x: number, digits = 3): string {
             </BarChart>
           </div>
         </div>
+      </section>
+
+      <section v-if="priorsTable" data-testid="priors">
+        <h2>Priors</h2>
+        <DataTable
+          :data="priorsTable.data"
+          :column-config="priorsTable.columnConfig"
+          :filename="priorsTable.filename"
+        />
       </section>
 
       <section

@@ -62,7 +62,7 @@ mod reader {
     use serde::Deserialize;
 
     use super::{ProjectedTrajectory, Projection};
-    use crate::{Draw, GenerationStats, ParamMeta, Params, Value, resample_indices};
+    use crate::{Draw, GenerationStats, ParamMeta, ParamPrior, Params, Value, resample_indices};
 
     /// A run log read back from disk: what the run declared, every completed
     /// generation's weighted particles, and any projections appended since.
@@ -119,6 +119,8 @@ mod reader {
     struct ParamSpec {
         name: String,
         kind: String,
+        // Absent in logs written before priors were logged.
+        prior: Option<ParamPrior>,
     }
 
     #[derive(Deserialize)]
@@ -210,10 +212,12 @@ mod reader {
                                 "real" => Ok(ParamMeta {
                                     name: p.name,
                                     real: true,
+                                    prior: p.prior,
                                 }),
                                 "int" => Ok(ParamMeta {
                                     name: p.name,
                                     real: false,
+                                    prior: p.prior,
                                 }),
                                 other => Err(invalid(format!("unknown parameter kind {other}"))),
                             })
