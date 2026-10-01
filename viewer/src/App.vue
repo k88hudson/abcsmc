@@ -1098,7 +1098,7 @@ function fmt(x: number, digits = 3): string {
           <div v-for="chart in trajectoryCharts" :key="chart.key" class="cell">
             <LineChart
               :series="chart.series"
-              :height="trajectoryCharts.length > 1 ? 220 : 260"
+              :height="trajectoryCharts.length > 1 ? 300 : 260"
               x-label="Index"
               y-label="Value"
               :y-scale-type="yScaleType"
