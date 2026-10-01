@@ -87,10 +87,27 @@ describe("applyLine", () => {
     expect(completedGenerations(s)).toHaveLength(1);
     expect(s.generations[0]!.live).toEqual([]);
     expect(s.generations[0]!.particles).toHaveLength(3);
+    // No `rejected` in the event, as in older logs.
+    expect(s.generations[0]!.rejected).toEqual([]);
+
+    applyLine(
+      s,
+      JSON.stringify({
+        type: "generation_completed",
+        generation: 1,
+        stats,
+        particles,
+        trajectories: [],
+        rejected: [{ distance: 9, values: [7, 8] }],
+      }),
+    );
+    expect(s.generations[1]!.rejected).toEqual([
+      { distance: 9, values: [7, 8] },
+    ]);
 
     applyLine(s, JSON.stringify({ type: "run_finished", generations: 1 }));
     expect(s.status).toBe("finished");
-    expect(s.lines).toBe(5);
+    expect(s.lines).toBe(6);
     expect(s.badLines).toBe(0);
   });
 

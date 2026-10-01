@@ -28,6 +28,7 @@ const lines = readFileSync(input, "utf8")
       const total = e.particles.reduce((s, p) => s + p.weight, 0);
       for (const p of e.particles) p.weight /= total;
       e.trajectories = every(e.trajectories, keepTrajectories);
+      if (e.rejected) e.rejected = every(e.rejected, keepTrajectories);
     }
     return e;
   });

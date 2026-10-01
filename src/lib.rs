@@ -95,8 +95,19 @@ where
     let on_accept = |params: &Params, distance: f64, attempts: u64| {
         observer.particle_accepted(generation, params, distance, attempts)
     };
+    let on_reject = |params: &Params, output: &M::Output, distance: f64| {
+        observer.particle_rejected(model, generation, params, output, distance)
+    };
     let output = match previous {
-        None => initialize(model, distance, tolerance, n_particles, rng, on_accept),
+        None => initialize(
+            model,
+            distance,
+            tolerance,
+            n_particles,
+            rng,
+            on_accept,
+            on_reject,
+        ),
         Some((previous, kernel)) => step(
             model,
             distance,
@@ -106,6 +117,7 @@ where
             kernel,
             rng,
             on_accept,
+            on_reject,
         ),
     };
     if !output.complete {

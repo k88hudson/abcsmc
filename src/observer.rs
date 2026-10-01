@@ -7,6 +7,7 @@ use std::fs::{self, File};
 use std::io::{self, BufWriter, Write};
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
 
 use crate::platform::{Bar, Instant};
@@ -74,8 +75,8 @@ impl RunMeta {
 
 /// Receives a run's events. Every method has a no-op default.
 ///
-/// `particle_accepted` is called from worker threads while a generation is
-/// filling, before weights exist; the complete weighted population arrives
+/// `particle_accepted` and `particle_rejected` are called from worker threads
+/// while a generation is filling; accepted particles arrive before weights exist; the complete weighted population arrives
 /// with `generation_completed`.
 pub trait RunObserver<M: CalibrationModel>: Sync {
     fn run_started(&self, _model: &M, _meta: &RunMeta) {}
@@ -87,6 +88,17 @@ pub trait RunObserver<M: CalibrationModel>: Sync {
         _params: &Params,
         _distance: f64,
         _attempts: u64,
+    ) {
+    }
+    /// A simulation whose distance exceeded the tolerance. Called from worker
+    /// threads, once per rejected simulation, so keep it cheap.
+    fn particle_rejected(
+        &self,
+        _model: &M,
+        _generation: usize,
+        _params: &Params,
+        _output: &M::Output,
+        _distance: f64,
     ) {
     }
     fn generation_completed(&self, _model: &M, _generation: &Generation<M>) {}
@@ -109,6 +121,19 @@ impl<M: CalibrationModel, A: RunObserver<M>, B: RunObserver<M>> RunObserver<M> f
             .particle_accepted(generation, params, distance, attempts);
         self.1
             .particle_accepted(generation, params, distance, attempts);
+    }
+    fn particle_rejected(
+        &self,
+        model: &M,
+        generation: usize,
+        params: &Params,
+        output: &M::Output,
+        distance: f64,
+    ) {
+        self.0
+            .particle_rejected(model, generation, params, output, distance);
+        self.1
+            .particle_rejected(model, generation, params, output, distance);
     }
     fn generation_completed(&self, model: &M, generation: &Generation<M>) {
         self.0.generation_completed(model, generation);
@@ -218,7 +243,9 @@ impl<M: CalibrationModel> RunObserver<M> for StdoutObserver {
 /// - `generation_completed`: `generation`, `stats`, `particles`
 ///   (`{params, weight, distance, seed}`, the seed as a string), and
 ///   `trajectories` (`{particle, values}` for an even sample of at most
-///   `max_trajectories` particles, empty when the model exposes none).
+///   `max_trajectories` particles, empty when the model exposes none), and
+///   `rejected` (`{distance, values}`, the trajectories of the first
+///   `max_rejected` simulations the generation rejected, in arrival order).
 ///
 /// Every accepted particle appears in exactly one `progress` batch: the batch
 /// pending when a generation completes is written before its
@@ -233,6 +260,11 @@ pub struct JsonlObserver {
     writer: Mutex<BufWriter<File>>,
     live: Mutex<Live>,
     max_trajectories: usize,
+    max_rejected: usize,
+    // Rejections seen this generation, so workers skip the lock once the
+    // sample is full.
+    rejected_seen: AtomicUsize,
+    rejected: Mutex<Vec<(f64, Vec<f64>)>>,
     flush_every: Duration,
 }
 
@@ -263,6 +295,9 @@ impl JsonlObserver {
                 last_flush: Instant::now(),
             }),
             max_trajectories: 200,
+            max_rejected: 200,
+            rejected_seen: AtomicUsize::new(0),
+            rejected: Mutex::new(Vec::new()),
             flush_every: Duration::from_millis(100),
         })
     }
@@ -277,6 +312,13 @@ impl JsonlObserver {
     /// Particles per generation whose trajectory is written. Default 200.
     pub fn max_trajectories(mut self, n: usize) -> Self {
         self.max_trajectories = n;
+        self
+    }
+
+    /// Rejected simulations per generation whose trajectory is written.
+    /// Default 200; 0 writes none.
+    pub fn max_rejected(mut self, n: usize) -> Self {
+        self.max_rejected = n;
         self
     }
 
@@ -369,6 +411,8 @@ impl<M: CalibrationModel> RunObserver<M> for JsonlObserver {
                 last_flush: Instant::now(),
             };
         }
+        self.rejected.lock().unwrap().clear();
+        self.rejected_seen.store(0, Ordering::Relaxed);
         let mut line =
             format!(r#"{{"type":"generation_started","generation":{generation},"tolerance":"#);
         push_f64(&mut line, tolerance);
@@ -386,6 +430,22 @@ impl<M: CalibrationModel> RunObserver<M> for JsonlObserver {
         live.pending.push((params.clone(), distance));
         if live.last_flush.elapsed() >= self.flush_every {
             self.write_progress(&mut live);
+        }
+    }
+
+    fn particle_rejected(
+        &self,
+        model: &M,
+        _generation: usize,
+        _params: &Params,
+        output: &M::Output,
+        distance: f64,
+    ) {
+        if self.rejected_seen.fetch_add(1, Ordering::Relaxed) >= self.max_rejected {
+            return;
+        }
+        if let Some(values) = model.trajectory(output) {
+            self.rejected.lock().unwrap().push((distance, values));
         }
     }
 
@@ -447,6 +507,17 @@ impl<M: CalibrationModel> RunObserver<M> for JsonlObserver {
                 line.push(',');
             }
             line.push_str(&format!(r#"{{"particle":{index},"values":"#));
+            push_f64s(&mut line, &values);
+            line.push('}');
+        }
+        line.push_str(r#"],"rejected":["#);
+        for (i, (distance, values)) in self.rejected.lock().unwrap().drain(..).enumerate() {
+            if i > 0 {
+                line.push(',');
+            }
+            line.push_str(r#"{"distance":"#);
+            push_f64(&mut line, distance);
+            line.push_str(r#","values":"#);
             push_f64s(&mut line, &values);
             line.push('}');
         }

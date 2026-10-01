@@ -49,6 +49,69 @@ test("loads a finished run from a file and renders every generation", async ({
   await expect(page.getByTestId("trajectories")).toContainText("Gen 1");
 });
 
+test("legend items turn trajectories off and on without moving the axes", async ({
+  page,
+}) => {
+  await page.goto("/");
+  await page.getByLabel("Load run.jsonl").setInputFiles(fixture);
+  await expect(page.getByTestId("status")).toHaveText("Finished");
+
+  const section = page.getByTestId("trajectories");
+  await expect(section).toContainText("20 rejected simulations");
+  const lines = section.locator("svg path[stroke]");
+  const all = await lines.count();
+  const texts = () => section.locator("svg text").allTextContents();
+  const before = await texts();
+  const item = (label: string) =>
+    section.locator("svg text").getByText(label, { exact: true });
+
+  await item("Rejected").click();
+  await expect(lines).toHaveCount(all - 20);
+  await item("Accepted").click();
+  await expect(lines).toHaveCount(all - 40);
+  await item("Rejected").click();
+  await expect(lines).toHaveCount(all - 20);
+
+  // Hidden items stay in the legend, struck through, and the ticks hold.
+  await expect(item("Accepted")).toHaveCSS(
+    "text-decoration-line",
+    "line-through",
+  );
+  await expect(item("Rejected")).toHaveCSS("text-decoration-line", "none");
+  expect(await texts()).toEqual(before);
+});
+
+test("the generation selector shows one generation or all of them", async ({
+  page,
+}) => {
+  await page.goto("/");
+  await page.getByLabel("Load run.jsonl").setInputFiles(fixture);
+  await expect(page.getByTestId("status")).toHaveText("Finished");
+
+  const section = page.getByTestId("trajectories");
+  const subtitle = section.locator("h2 small");
+  await expect(subtitle).toHaveText(
+    "Gen 4, 20 of 100 accepted particles, 20 rejected simulations",
+  );
+
+  await section.getByRole("combobox", { name: "Generation" }).click();
+  await page.getByRole("option", { name: "All generations" }).click();
+  await expect(subtitle).toHaveText(
+    "All generations, 100 of 500 accepted particles, 80 rejected simulations",
+  );
+
+  await section.getByRole("combobox", { name: "Generation" }).click();
+  await page.getByRole("option", { name: "Gen 2" }).click();
+  await expect(subtitle).toContainText("Gen 2, 20 of 100");
+  await expect(page.locator(".gen-table tbody tr.selected")).toContainText("2");
+
+  // Picking a generation elsewhere leaves "All generations".
+  await section.getByRole("combobox", { name: "Generation" }).click();
+  await page.getByRole("option", { name: "All generations" }).click();
+  await page.locator(".gen-table tbody tr").nth(1).click();
+  await expect(subtitle).toContainText("Gen 1, 20 of 100");
+});
+
 test("chart tooltips name their series", async ({ page }) => {
   await page.goto("/");
   await page.getByLabel("Load run.jsonl").setInputFiles(fixture);

@@ -1,6 +1,6 @@
 <script setup lang="ts">
-import { computed, onScopeDispose, reactive, ref } from "vue";
-import { Button, SidebarLayout, Toggle } from "cfasim-ui/components";
+import { computed, onScopeDispose, reactive, ref, watch } from "vue";
+import { Button, SelectBox, SidebarLayout, Toggle } from "cfasim-ui/components";
 import { BarChart, DataTable, LineChart } from "cfasim-ui/charts";
 import ChartTip from "./ChartTip.vue";
 import { columnsToCsv, fileStem } from "./csv";
@@ -40,6 +40,10 @@ const error = ref<string | null>(null);
 const dragging = ref(false);
 const selectedGeneration = ref<number | null>(null);
 const logScale = ref(false);
+const showAccepted = ref(true);
+const showRejected = ref(true);
+const showObserved = ref(true);
+const allGenerations = ref(false);
 const main = ref<HTMLElement | null>(null);
 const exporting = ref(false);
 const yScaleType = computed(() => (logScale.value ? "log" : "linear"));
@@ -52,6 +56,7 @@ function reset() {
   error.value = null;
   live.value = false;
   selectedGeneration.value = null;
+  allGenerations.value = false;
 }
 
 function onLines(lines: string[]) {
@@ -325,8 +330,89 @@ const targetChart = computed(() => {
   };
 });
 
+interface TrajectoryView {
+  label: string;
+  nParticles: number;
+  // `name` is the series' CSV column.
+  trajectories: { name: string; values: number[] }[];
+  rejected: { name: string; values: number[] }[];
+}
+
+// What the trajectories chart draws: the shown generation, or every completed
+// generation together.
+const trajectoryView = computed<TrajectoryView | null>(() => {
+  const gens = allGenerations.value
+    ? completed.value
+    : shownGeneration.value
+      ? [shownGeneration.value]
+      : [];
+  if (gens.length === 0) return null;
+  const prefix = (g: Generation) =>
+    allGenerations.value ? `gen_${g.generation}_` : "";
+  return {
+    label: allGenerations.value ? "All generations" : generationLabel(gens[0]!),
+    nParticles: gens.reduce((n, g) => n + g.particles.length, 0),
+    trajectories: gens.flatMap((g) =>
+      g.trajectories.map((t) => ({
+        name: `${prefix(g)}particle_${t.particle}`,
+        values: t.values,
+      })),
+    ),
+    rejected: gens.flatMap((g) =>
+      g.rejected.map((t, i) => ({
+        name: `${prefix(g)}rejected_${i}`,
+        values: t.values,
+      })),
+    ),
+  };
+});
+
+const ALL_GENERATIONS = "all";
+
+const generationOptions = computed(() => [
+  { value: ALL_GENERATIONS, label: "All generations" },
+  ...completed.value.map((g) => ({
+    value: String(g.generation),
+    label: generationLabel(g),
+  })),
+]);
+
+const generationChoice = computed({
+  get: () =>
+    allGenerations.value
+      ? ALL_GENERATIONS
+      : String(shownGeneration.value?.generation ?? ""),
+  set: (value: string | undefined) => {
+    if (value === undefined) return;
+    allGenerations.value = value === ALL_GENERATIONS;
+    if (value !== ALL_GENERATIONS) selectedGeneration.value = Number(value);
+  },
+});
+
+// The extent of everything the trajectories chart can show. The legend's key
+// series span it, so the axes stay put as series are turned off and on.
+const trajectoryFrame = computed(() => {
+  const g = trajectoryView.value;
+  const all: number[][] = [];
+  if (run.observed) all.push(run.observed);
+  if (g) {
+    for (const t of g.trajectories) all.push(t.values);
+    for (const t of g.rejected) all.push(t.values);
+  }
+  let xMax = 0;
+  let yMin = Infinity;
+  let yMax = -Infinity;
+  for (const values of all) {
+    xMax = Math.max(xMax, values.length - 1);
+    const [lo, hi] = extent(values);
+    yMin = Math.min(yMin, lo);
+    yMax = Math.max(yMax, hi);
+  }
+  return yMin <= yMax ? { xMax, yMin, yMax } : null;
+});
+
 const trajectorySeries = computed(() => {
-  const g = shownGeneration.value;
+  const g = trajectoryView.value;
   const series: {
     x: number[];
     data: number[];
@@ -336,7 +422,36 @@ const trajectorySeries = computed(() => {
     legend?: string;
     showInTooltip?: boolean;
   }[] = [];
-  if (g) {
+  // One zero-width series per legend item: it puts the item in the chart's
+  // legend (so exports carry it) whether or not its lines are drawn.
+  const frame = trajectoryFrame.value;
+  if (frame) {
+    for (const item of trajectoryLegend.value) {
+      series.push({
+        x: [0, frame.xMax],
+        data: [frame.yMin, frame.yMax],
+        color: item.shown.value ? item.color : palette.value.legendOff,
+        strokeWidth: 0,
+        dots: false,
+        legend: item.label,
+        showInTooltip: false,
+      });
+    }
+  }
+  // Rejected first, so accepted trajectories draw over them.
+  if (g && showRejected.value) {
+    for (const t of g.rejected) {
+      series.push({
+        x: t.values.map((_, i) => i),
+        data: t.values,
+        color: palette.value.rejected,
+        strokeWidth: 1,
+        dots: false,
+        showInTooltip: false,
+      });
+    }
+  }
+  if (g && showAccepted.value) {
     for (const t of g.trajectories) {
       series.push({
         x: t.values.map((_, i) => i),
@@ -348,41 +463,145 @@ const trajectorySeries = computed(() => {
       });
     }
   }
-  if (run.observed) {
+  if (run.observed && showObserved.value) {
     series.push({
       x: run.observed.map((_, i) => i),
       data: run.observed,
       color: palette.value.observed,
       strokeWidth: 2.5,
       dots: true,
-      legend: "Observed",
     });
   }
   return series;
 });
 
+// Whether the section has anything to draw, whatever the toggles say, so
+// turning both off does not hide the toggles.
+const hasTrajectoryData = computed(() => {
+  const g = trajectoryView.value;
+  return (
+    !!run.observed ||
+    (g !== null && g.trajectories.length + g.rejected.length > 0)
+  );
+});
+
+// The trajectories chart's legend items, each turning its series off and on.
+const trajectoryLegend = computed(() => {
+  const g = trajectoryView.value;
+  const items = [];
+  if (run.observed)
+    items.push({
+      label: "Observed",
+      color: palette.value.observed,
+      shown: showObserved,
+    });
+  if (g && g.trajectories.length > 0)
+    items.push({
+      label: "Accepted",
+      color: solid(palette.value.trajectory),
+      shown: showAccepted,
+    });
+  if (g && g.rejected.length > 0)
+    items.push({
+      label: "Rejected",
+      color: solid(palette.value.rejected),
+      shown: showRejected,
+    });
+  return items;
+});
+
+// An rgba() line color at full opacity, for a legend swatch.
+function solid(color: string): string {
+  return color.replace(/rgba\(([^)]*),[^,)]*\)/, "rgb($1)");
+}
+
+// The chart's legend is plain svg, so clicks are matched to its labels by
+// position: the label text plus the swatch to its left.
+const trajectoryChart = ref<HTMLElement | null>(null);
+
+function legendLabels(): SVGTextElement[] {
+  const labels = new Set(trajectoryLegend.value.map((item) => item.label));
+  return [
+    ...(trajectoryChart.value?.querySelectorAll<SVGTextElement>("svg text") ??
+      []),
+  ].filter((text) => labels.has(text.textContent?.trim() ?? ""));
+}
+
+function legendItemAt(event: MouseEvent) {
+  for (const text of legendLabels()) {
+    const box = text.getBoundingClientRect();
+    if (
+      event.clientX >= box.left - 22 &&
+      event.clientX <= box.right + 4 &&
+      event.clientY >= box.top - 4 &&
+      event.clientY <= box.bottom + 4
+    ) {
+      const label = text.textContent!.trim();
+      return trajectoryLegend.value.find((item) => item.label === label);
+    }
+  }
+  return undefined;
+}
+
+function onLegendClick(event: MouseEvent) {
+  const item = legendItemAt(event);
+  if (item) item.shown.value = !item.shown.value;
+}
+
+function onLegendHover(event: MouseEvent) {
+  if (trajectoryChart.value)
+    trajectoryChart.value.style.cursor = legendItemAt(event) ? "pointer" : "";
+}
+
+// Strike through the labels of hidden items. Set on the elements so exported
+// images show it too.
+watch(
+  [trajectorySeries, trajectoryChart],
+  () => {
+    for (const text of legendLabels()) {
+      const label = text.textContent!.trim();
+      const item = trajectoryLegend.value.find((i) => i.label === label);
+      const off = item ? !item.shown.value : false;
+      text.style.textDecoration = off ? "line-through" : "";
+      text.style.opacity = off ? "0.55" : "";
+    }
+  },
+  { flush: "post" },
+);
+
 const trajectoryDownload = computed(() => {
-  const g = shownGeneration.value;
-  const observed = run.observed;
-  const trajectories = g?.trajectories ?? [];
+  const g = trajectoryView.value;
+  const observed = showObserved.value ? run.observed : null;
+  const trajectories = showAccepted.value ? (g?.trajectories ?? []) : [];
+  const rejected = showRejected.value ? (g?.rejected ?? []) : [];
   let length = observed?.length ?? 0;
   for (const t of trajectories) length = Math.max(length, t.values.length);
+  for (const t of rejected) length = Math.max(length, t.values.length);
   return {
-    title: g
-      ? `Trajectories: ${generationLabel(g)}, ${trajectories.length} of ${g.particles.length} particles`
-      : "Trajectories",
-    filename: fileStem(run.id, "trajectories", g ? generationLabel(g) : null),
+    title: g ? `Trajectories: ${trajectorySubtitle(g)}` : "Trajectories",
+    filename: fileStem(run.id, "trajectories", g?.label),
     csv: () =>
       columnsToCsv([
         { header: "index", values: Array.from({ length }, (_, i) => i) },
         ...(observed ? [{ header: "observed", values: observed }] : []),
         ...trajectories.map((t) => ({
-          header: `particle_${t.particle}`,
+          header: t.name,
+          values: t.values,
+        })),
+        ...rejected.map((t) => ({
+          header: t.name,
           values: t.values,
         })),
       ]),
   };
 });
+
+function trajectorySubtitle(g: TrajectoryView): string {
+  const accepted = `${g.trajectories.length} of ${g.nParticles} accepted particles`;
+  return g.rejected.length > 0
+    ? `${g.label}, ${accepted}, ${g.rejected.length} rejected simulations`
+    : `${g.label}, ${accepted}`;
+}
 
 const overlays = computed(() => {
   const gens = completed.value;
@@ -577,6 +796,11 @@ function withinObserved<T extends { seriesIndex: number }>(
   return values.filter((v) => v.seriesIndex !== 1 || index < n);
 }
 
+function selectGeneration(generation: number) {
+  selectedGeneration.value = generation;
+  allGenerations.value = false;
+}
+
 function generationLabel(g: Generation): string {
   return g.generation === 0 && g.tolerance === null
     ? "Prior"
@@ -679,7 +903,7 @@ function fmt(x: number, digits = 3): string {
                 running: g.status === 'running',
               }"
               @click="
-                g.status === 'completed' && (selectedGeneration = g.generation)
+                g.status === 'completed' && selectGeneration(g.generation)
               "
             >
               <td>{{ g.generation }}</td>
@@ -813,28 +1037,37 @@ function fmt(x: number, digits = 3): string {
       </section>
 
       <section
-        v-if="shownGeneration && trajectorySeries.length"
+        v-if="trajectoryView && hasTrajectoryData"
         data-testid="trajectories"
       >
         <h2>
           Trajectories
-          <small
-            >{{ generationLabel(shownGeneration) }},
-            {{ shownGeneration.trajectories.length }} of
-            {{ shownGeneration.particles.length }} particles</small
-          >
+          <small>{{ trajectorySubtitle(trajectoryView) }}</small>
         </h2>
-        <LineChart
-          :series="trajectorySeries"
-          :height="260"
-          x-label="Index"
-          y-label="Value"
-          :y-scale-type="yScaleType"
-          :filename="trajectoryDownload.filename"
-          :data-export-name="trajectoryDownload.filename"
-          :title="trajectoryDownload.title"
-          :csv="trajectoryDownload.csv"
+        <SelectBox
+          v-model="generationChoice"
+          :options="generationOptions"
+          label="Generation"
+          class="generation-select"
         />
+        <p class="muted legend-hint">Click a legend item to hide or show it.</p>
+        <div
+          ref="trajectoryChart"
+          @click="onLegendClick"
+          @mousemove="onLegendHover"
+        >
+          <LineChart
+            :series="trajectorySeries"
+            :height="260"
+            x-label="Index"
+            y-label="Value"
+            :y-scale-type="yScaleType"
+            :filename="trajectoryDownload.filename"
+            :data-export-name="trajectoryDownload.filename"
+            :title="trajectoryDownload.title"
+            :csv="trajectoryDownload.csv"
+          />
+        </div>
       </section>
 
       <section v-if="projectionCharts.length" data-testid="projections">
@@ -953,7 +1186,7 @@ function fmt(x: number, digits = 3): string {
               selected:
                 shownGeneration?.generation === cell.generation.generation,
             }"
-            @click="selectedGeneration = cell.generation.generation"
+            @click="selectGeneration(cell.generation.generation)"
           >
             <h4>
               {{ cell.label }}
@@ -1048,6 +1281,19 @@ h4 small {
 .description {
   margin: 0 0 0.75rem;
   max-width: 80ch;
+}
+.generation-select {
+  max-width: 16rem;
+  margin-bottom: 0.5rem;
+}
+.legend-hint {
+  margin: 0 0 0.25rem;
+  font-size: 0.85rem;
+}
+.legend__swatch {
+  width: 0.9em;
+  height: 0.2em;
+  border-radius: 1px;
 }
 .log-toggle {
   font-size: 0.85rem;

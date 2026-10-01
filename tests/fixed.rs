@@ -363,6 +363,14 @@ fn jsonl_log_records_the_whole_run() {
         assert_eq!(trajectories[1]["particle"], N / 10);
         assert_eq!(trajectories[9]["particle"], 9 * N / 10);
         assert_eq!(trajectories[0]["values"].as_array().unwrap().len(), 2);
+        // The first rejected simulations, up to the default cap of 200.
+        let rejected = event["rejected"].as_array().unwrap();
+        let n_rejected = generation.stats.attempts as usize - N;
+        assert_eq!(rejected.len(), n_rejected.min(200));
+        for r in rejected {
+            assert!(r["distance"].as_f64().unwrap() > generation.stats.tolerance);
+            assert_eq!(r["values"].as_array().unwrap().len(), 2);
+        }
     }
 
     let progress = of_type("progress");

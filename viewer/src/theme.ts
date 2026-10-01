@@ -8,6 +8,9 @@ export interface ChartPalette {
   kde: string;
   observed: string;
   trajectory: string;
+  rejected: string;
+  // Legend swatch of a series that is turned off.
+  legendOff: string;
   median: string;
   band: string;
   bandOpacity: [number, number];
@@ -20,6 +23,8 @@ const light: ChartPalette = {
   kde: "#dc2626",
   observed: "#14b8a6",
   trajectory: "rgba(100, 116, 139, 0.3)",
+  rejected: "rgba(220, 38, 38, 0.25)",
+  legendOff: "rgba(100, 116, 139, 0.3)",
   median: "#1d4ed8",
   band: "#2563eb",
   bandOpacity: [0.15, 0.3],
@@ -32,6 +37,8 @@ const dark: ChartPalette = {
   kde: "#e66767",
   observed: "#2dd4bf",
   trajectory: "rgba(148, 163, 184, 0.3)",
+  rejected: "rgba(230, 103, 103, 0.3)",
+  legendOff: "rgba(148, 163, 184, 0.3)",
   median: "#86b6ef",
   band: "#3987e5",
   bandOpacity: [0.2, 0.4],

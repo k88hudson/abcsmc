@@ -44,6 +44,12 @@ export interface Trajectory {
   values: number[];
 }
 
+// A simulation the generation rejected: its distance exceeded the tolerance.
+export interface RejectedTrajectory {
+  distance: number;
+  values: number[];
+}
+
 export interface Generation {
   generation: number;
   tolerance: number | null;
@@ -51,6 +57,8 @@ export interface Generation {
   stats: GenerationStats | null;
   particles: Particle[];
   trajectories: Trajectory[];
+  // A sample of the generation's rejected simulations.
+  rejected: RejectedTrajectory[];
   // Accepted so far while running: params and distance only, no weights yet.
   live: { params: number[]; distance: number }[];
   liveAccepted: number;
@@ -115,6 +123,8 @@ export type RunEvent =
       stats: GenerationStats;
       particles: Particle[];
       trajectories: Trajectory[];
+      // Absent in logs written before rejected simulations were logged.
+      rejected?: RejectedTrajectory[];
     }
   | { type: "generation_abandoned"; generation: number }
   | { type: "run_finished"; generations: number }
@@ -148,6 +158,7 @@ function generationAt(state: RunState, index: number): Generation {
       stats: null,
       particles: [],
       trajectories: [],
+      rejected: [],
       live: [],
       liveAccepted: 0,
       liveAttempts: 0,
@@ -197,6 +208,7 @@ export function applyEvent(state: RunState, event: RunEvent): RunState {
       g.stats = event.stats;
       g.particles = event.particles;
       g.trajectories = event.trajectories;
+      g.rejected = event.rejected ?? [];
       g.live = [];
       g.liveAccepted = event.stats.accepted;
       g.liveAttempts = event.stats.attempts;

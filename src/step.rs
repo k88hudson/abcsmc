@@ -28,7 +28,8 @@ pub struct StepOutput<M: CalibrationModel> {
 /// Rejection sampling from the prior at `error_threshold`; equal weights.
 ///
 /// Each particle runs on its own `StdRng` seeded from `rng`, in parallel, so
-/// results do not depend on the thread count.
+/// results do not depend on the thread count. `on_accept` and `on_reject` are
+/// called from worker threads, once per simulation.
 pub fn initialize<M>(
     model: &M,
     distance: &(impl Distance<M::Output> + ?Sized),
@@ -36,6 +37,7 @@ pub fn initialize<M>(
     n_particles: usize,
     rng: &mut impl Rng,
     on_accept: impl Fn(&Params, f64, u64) + Sync,
+    on_reject: impl Fn(&Params, &M::Output, f64) + Sync,
 ) -> StepOutput<M>
 where
     M: CalibrationModel + Sync,
@@ -68,6 +70,7 @@ where
                         n_attempts,
                     );
                 }
+                on_reject(&params, &output, distance);
             }
             (None, max_attempts)
         })
@@ -102,6 +105,7 @@ pub fn step<M>(
     kernel: &dyn PerturbationKernel,
     rng: &mut impl Rng,
     on_accept: impl Fn(&Params, f64, u64) + Sync,
+    on_reject: impl Fn(&Params, &M::Output, f64) + Sync,
 ) -> StepOutput<M>
 where
     M: CalibrationModel + Sync,
@@ -158,6 +162,7 @@ where
                         n_attempts,
                     );
                 }
+                on_reject(&proposed, &output, distance);
             }
             (None, max_attempts)
         })
