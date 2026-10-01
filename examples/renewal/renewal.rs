@@ -16,6 +16,13 @@ pub enum Population {
     Infinite,
 }
 
+/// Scales transmission by `multiplier` from step `start` onward.
+#[derive(Clone, Copy)]
+pub struct TransmissionChange {
+    pub start: usize,
+    pub multiplier: f64,
+}
+
 pub struct Parameters {
     pub population: Population,
     pub r0: f64,
@@ -23,6 +30,7 @@ pub struct Parameters {
     pub symptom_onset_pmf: Vec<f64>,
     pub initial_infections: Vec<u64>,
     pub sim_length: usize,
+    pub transmission_change: Option<TransmissionChange>,
 }
 
 #[derive(Default)]
@@ -60,7 +68,11 @@ impl RenewalModel {
                     current_infectious += output.infection_incidence[step - lag - 1] as f64
                         * parameters.generation_interval_pmf[lag];
                 }
-                let transmission_rate = rt[step] * current_infectious;
+                let scale = match parameters.transmission_change {
+                    Some(change) if step >= change.start => change.multiplier,
+                    _ => 1.0,
+                };
+                let transmission_rate = rt[step] * scale * current_infectious;
 
                 match parameters.population {
                     Population::Finite(population) => {
@@ -120,9 +132,37 @@ impl RenewalModel {
 
 #[cfg(test)]
 mod test {
-    use super::{Parameters, Population, RenewalModel};
+    use super::{Parameters, Population, RenewalModel, TransmissionChange};
     use rand::SeedableRng;
     use rand::rngs::StdRng;
+
+    #[test]
+    fn test_transmission_change_keeps_earlier_history() {
+        let start = 30;
+        let simulate = |transmission_change| {
+            let parameters = Parameters {
+                population: Population::Finite(10_000),
+                r0: 2.0,
+                generation_interval_pmf: vec![0., 0., 0.25, 0.5, 0.25],
+                symptom_onset_pmf: vec![0., 0.5, 0.5],
+                initial_infections: vec![5],
+                sim_length: 100,
+                transmission_change,
+            };
+            RenewalModel::simulate(&parameters, &mut StdRng::seed_from_u64(42))
+        };
+        let baseline = simulate(None);
+        let reduced = simulate(Some(TransmissionChange {
+            start,
+            multiplier: 0.5,
+        }));
+        assert_eq!(
+            baseline.infection_incidence[..start],
+            reduced.infection_incidence[..start]
+        );
+        let total = |incidence: &[u64]| incidence.iter().sum::<u64>();
+        assert!(total(&reduced.infection_incidence) < total(&baseline.infection_incidence));
+    }
 
     #[test]
     fn test_final_size() {
@@ -134,6 +174,7 @@ mod test {
             symptom_onset_pmf: vec![1.],
             initial_infections: vec![1],
             sim_length: 200,
+            transmission_change: None,
         };
         let mut rng = StdRng::seed_from_u64(8675308);
         let output = RenewalModel::simulate(&parameters, &mut rng);
@@ -159,6 +200,7 @@ mod test {
                 symptom_onset_pmf: vec![1.],
                 initial_infections: vec![initial_infections],
                 sim_length: generation_interval_pmf.len() + 1,
+                transmission_change: None,
             };
             let mut rng = StdRng::seed_from_u64(seed);
             let output = RenewalModel::simulate(&parameters, &mut rng);
@@ -188,6 +230,7 @@ mod test {
             symptom_onset_pmf: symptom_onset_pmf.clone(),
             initial_infections: vec![initial_infections],
             sim_length: symptom_onset_pmf.len() + 1,
+            transmission_change: None,
         };
         let mut rng = StdRng::seed_from_u64(8675309);
         let output = RenewalModel::simulate(&parameters, &mut rng);

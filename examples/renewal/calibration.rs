@@ -12,7 +12,8 @@ use abcsmc::{
 use rand::{SeedableRng, rngs::StdRng};
 use serde::Serialize;
 
-use crate::renewal::{Parameters, Population, RenewalModel, RenewalOutput};
+use crate::projection;
+use crate::renewal::{Parameters, Population, RenewalModel, RenewalOutput, TransmissionChange};
 
 define_priors! {
     pub struct RenewalDraw / RenewalPriors {
@@ -21,8 +22,12 @@ define_priors! {
     }
 }
 
-struct RenewalFit {
-    observed: Vec<u64>,
+/// Fixed settings live here rather than in the priors, so a scenario is this
+/// model with a field changed.
+#[derive(Clone)]
+pub struct RenewalFit {
+    pub observed: Vec<u64>,
+    pub transmission_change: Option<TransmissionChange>,
 }
 
 impl Model for RenewalFit {
@@ -45,6 +50,7 @@ impl Model for RenewalFit {
             symptom_onset_pmf: vec![0., 0.5, 0.5],
             initial_infections: vec![draw.initial_infections as u64],
             sim_length: 7 * 24,
+            transmission_change: self.transmission_change,
         };
         RenewalModel::simulate(&parameters, &mut StdRng::seed_from_u64(seed))
     }
@@ -114,10 +120,12 @@ pub fn fit() {
     // Fit the first 6 weeks; later observations are held out.
     let model = RenewalFit {
         observed: incidence.into_iter().take(7 * 6).collect(),
+        transmission_change: None,
     };
     let output_dir = crate_path.join("examples/output");
-    let log = JsonlObserver::timestamped(output_dir.join("runs")).unwrap();
-    println!("Writing {}", log.path().display());
+    let log = JsonlObserver::create(output_dir.join("runs"), "renewal").unwrap();
+    let log_path = log.path().to_path_buf();
+    println!("Writing {}", log_path.display());
     let generations = run_quantiles_with(
         &model,
         &[0.1, 0.05, 0.01, 0.005],
@@ -153,4 +161,8 @@ pub fn fit() {
 
     write_csv(&particle_rows, &output_dir.join("particles.csv"));
     write_csv(&trajectory_rows, &output_dir.join("trajectories.csv"));
+
+    if let Some(posterior) = generations.last() {
+        projection::write_scenarios(&model, posterior, &log_path);
+    }
 }
