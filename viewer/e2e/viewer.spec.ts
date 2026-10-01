@@ -21,6 +21,10 @@ test("loads a finished run from a file and renders every generation", async ({
   await expect(page.locator(".gen-table tbody tr").first()).toContainText("∞");
 
   await expect(page.getByTestId("live")).toHaveCount(0);
+  await expect(page.getByTestId("target")).toContainText("42 observed points");
+  await expect(
+    page.getByTestId("target").locator(".line-chart-wrapper"),
+  ).toHaveCount(1);
   await expect(page.getByTestId("trajectories")).toContainText("Gen 4");
   await expect(
     page

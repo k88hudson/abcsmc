@@ -298,6 +298,33 @@ const projectionCharts = computed(() =>
   }),
 );
 
+// The observed series the distance fits, on its own.
+const targetChart = computed(() => {
+  const observed = run.observed;
+  if (!observed) return null;
+  const x = observed.map((_, i) => i);
+  return {
+    points: observed.length,
+    title: "Target data",
+    filename: fileStem(run.id, "target"),
+    series: [
+      {
+        x,
+        data: observed,
+        color: palette.value.observed,
+        strokeWidth: 2,
+        dots: true,
+        legend: "Observed",
+      },
+    ],
+    csv: () =>
+      columnsToCsv([
+        { header: "index", values: x },
+        { header: "observed", values: observed },
+      ]),
+  };
+});
+
 const trajectorySeries = computed(() => {
   const g = shownGeneration.value;
   const series: {
@@ -756,6 +783,33 @@ function fmt(x: number, digits = 3): string {
           :column-config="priorsTable.columnConfig"
           :filename="priorsTable.filename"
         />
+      </section>
+
+      <section v-if="targetChart" data-testid="target">
+        <h2>
+          Target data
+          <small>{{ targetChart.points }} observed points</small>
+        </h2>
+        <LineChart
+          :series="targetChart.series"
+          :height="220"
+          x-label="Index"
+          y-label="Value"
+          :y-scale-type="yScaleType"
+          :filename="targetChart.filename"
+          :data-export-name="targetChart.filename"
+          :title="targetChart.title"
+          :csv="targetChart.csv"
+          tooltip-trigger="hover"
+        >
+          <template #tooltip="t">
+            <ChartTip
+              :heading="`Index ${t.index}`"
+              :values="t.values"
+              :labels="['Observed']"
+            />
+          </template>
+        </LineChart>
       </section>
 
       <section
