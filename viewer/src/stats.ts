@@ -122,13 +122,6 @@ export function extent(values: number[]): [number, number] {
   return lo <= hi ? [lo, hi] : [0, 1];
 }
 
-// Generation 0 is grey (the prior); later generations run light to dark blue.
-export function generationColor(i: number, n: number): string {
-  if (i === 0) return "#9ca3af";
-  const t = n > 1 ? i / (n - 1) : 0;
-  return `hsl(222, 75%, ${Math.round(70 - t * 52)}%)`;
-}
-
 // The values at cumulative weight fractions `qs` (each in [0, 1]), taking the
 // first value whose running weight reaches the fraction. Non-finite values
 // are skipped. Returns NaN for every fraction when nothing is left.

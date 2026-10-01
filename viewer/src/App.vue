@@ -18,12 +18,15 @@ import {
 } from "./sources";
 import {
   extent,
-  generationColor,
   normalizedWeights,
   quantileBands,
   weightedHistogram,
   weightedKde,
 } from "./stats";
+import { chartPalette, generationColor, useDark } from "./theme";
+
+const isDark = useDark();
+const palette = computed(() => chartPalette(isDark.value));
 
 const run = reactive<RunState>(emptyRun());
 const source = ref<string | null>(null);
@@ -207,7 +210,7 @@ const projectionCharts = computed(() =>
       {
         x,
         data: bands[2]!,
-        color: "#1d4ed8",
+        color: palette.value.median,
         strokeWidth: 2,
         dots: false,
         legend: "Median",
@@ -217,7 +220,7 @@ const projectionCharts = computed(() =>
       series.push({
         x: run.observed.map((_, i) => i),
         data: run.observed,
-        color: "#14b8a6",
+        color: palette.value.observed,
         strokeWidth: 2.5,
         dots: true,
         legend: "Observed",
@@ -232,16 +235,16 @@ const projectionCharts = computed(() =>
           x,
           lower: bands[0]!,
           upper: bands[4]!,
-          color: "#2563eb",
-          opacity: 0.15,
+          color: palette.value.band,
+          opacity: palette.value.bandOpacity[0],
           legend: "90%",
         },
         {
           x,
           lower: bands[1]!,
           upper: bands[3]!,
-          color: "#2563eb",
-          opacity: 0.3,
+          color: palette.value.band,
+          opacity: palette.value.bandOpacity[1],
           legend: "50%",
         },
       ],
@@ -265,7 +268,7 @@ const trajectorySeries = computed(() => {
       series.push({
         x: t.values.map((_, i) => i),
         data: t.values,
-        color: "rgba(100, 116, 139, 0.3)",
+        color: palette.value.trajectory,
         strokeWidth: 1,
         dots: false,
         showInTooltip: false,
@@ -276,7 +279,7 @@ const trajectorySeries = computed(() => {
     series.push({
       x: run.observed.map((_, i) => i),
       data: run.observed,
-      color: "#14b8a6",
+      color: palette.value.observed,
       strokeWidth: 2.5,
       dots: true,
       legend: "Observed",
@@ -302,7 +305,7 @@ const overlays = computed(() => {
         return {
           x: kde.x,
           data: kde.y,
-          color: generationColor(k, n),
+          color: generationColor(k, n, isDark.value),
           strokeWidth: k === n - 1 ? 2.5 : 1.5,
           dots: false,
           legend: generationLabel(g),
@@ -321,7 +324,7 @@ const overlays = computed(() => {
         g.particles,
         normalizedWeights(g.particles.map((p) => p.weight)),
       ).map((b) => b.weight),
-      color: generationColor(k, n),
+      color: generationColor(k, n, isDark.value),
       opacity: 0.35 + (0.6 * k) / Math.max(1, n - 1),
       legend: generationLabel(g),
     }));
@@ -522,7 +525,7 @@ function fmt(x: number, digits = 3): string {
             <p class="label">{{ chart.name }}, accepted so far (unweighted)</p>
             <BarChart
               :categories="chart.categories"
-              :series="[{ data: chart.data, color: '#2563eb' }]"
+              :series="[{ data: chart.data, color: palette.posterior }]"
               :height="160"
               :menu="false"
               tooltip-trigger="hover"
@@ -582,7 +585,9 @@ function fmt(x: number, digits = 3): string {
 
       <section v-if="completed.length" data-testid="overlays">
         <h2>Posterior across generations</h2>
-        <p class="muted">Prior in grey, later generations darker.</p>
+        <p class="muted">
+          Prior in grey, later generations {{ isDark ? "lighter" : "darker" }}.
+        </p>
         <div class="grid">
           <div v-for="o in overlays" :key="o.name" class="cell">
             <p class="label">{{ o.name }}</p>
@@ -641,14 +646,14 @@ function fmt(x: number, digits = 3): string {
                   :series="[
                     {
                       data: p.prior,
-                      color: '#94a3b8',
-                      blendMode: 'multiply',
+                      color: palette.prior,
+                      blendMode: palette.overlapBlend,
                       legend: 'Prior',
                     },
                     {
                       data: p.posterior,
-                      color: '#2563eb',
-                      blendMode: 'multiply',
+                      color: palette.posterior,
+                      blendMode: palette.overlapBlend,
                       legend: 'Posterior',
                     },
                   ]"
@@ -659,7 +664,7 @@ function fmt(x: number, digits = 3): string {
                           {
                             x: p.kde.x,
                             data: p.kde.data,
-                            color: '#dc2626',
+                            color: palette.kde,
                             strokeWidth: 2,
                             dots: false,
                           },
@@ -778,7 +783,7 @@ h4 small {
 }
 .progress {
   height: 10px;
-  background: #e5e7eb;
+  background: var(--color-bg-2, #e5e7eb);
   border-radius: 5px;
   overflow: hidden;
 }
