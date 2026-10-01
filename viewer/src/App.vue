@@ -380,7 +380,7 @@ function fmt(x: number, digits = 3): string {
 </script>
 
 <template>
-  <SidebarLayout hide-topbar>
+  <SidebarLayout>
     <template #sidebar>
       <section class="side-section">
         <h3>Source</h3>
@@ -686,13 +686,9 @@ function fmt(x: number, digits = 3): string {
 </template>
 
 <style>
-/* Non-scoped overrides of cfasim-ui's SidebarLayout: wider content, and no
-   reserved topbar height since this page has no topbar controls. */
+/* Non-scoped override of cfasim-ui's SidebarLayout: wider content. */
 .MainContent {
   max-width: 1400px !important;
-}
-.SidebarLayout .Topbar {
-  min-height: 0;
 }
 </style>
 
