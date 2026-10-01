@@ -27,12 +27,52 @@ test("loads a finished run from a file and renders every generation", async ({
       .getByTestId("overlays")
       .locator(".line-chart-wrapper, .bar-chart-wrapper"),
   ).toHaveCount(2);
+  const posteriors = page.getByTestId("posteriors");
+  await expect(posteriors).toContainText("Gen 4");
+  await expect(posteriors.locator("tbody tr")).toHaveCount(2);
+  await expect(posteriors.locator("tbody tr").first()).toContainText("r0");
   await expect(page.getByTestId("projections")).toContainText("baseline");
   await expect(page.getByTestId("projections")).toContainText("20 particles");
   await expect(page.getByTestId("cells").locator(".gen-cell")).toHaveCount(5);
 
   await page.locator(".gen-table tbody tr").nth(1).click();
   await expect(page.getByTestId("trajectories")).toContainText("Gen 1");
+});
+
+test("chart tooltips name their series", async ({ page }) => {
+  await page.goto("/");
+  await page.getByLabel("Load run.jsonl").setInputFiles(fixture);
+  await expect(page.getByTestId("status")).toHaveText("Finished");
+
+  const hover = async (testId: string, fraction: number) => {
+    const chart = page
+      .getByTestId(testId)
+      .locator(".line-chart-wrapper, .bar-chart-wrapper")
+      .first();
+    await chart.scrollIntoViewIfNeeded();
+    const box = (await chart.boundingBox())!;
+    await page.mouse.move(
+      box.x + box.width * fraction,
+      box.y + box.height * 0.5,
+    );
+    return chart.locator(".chart-tip");
+  };
+
+  const overlay = await hover("overlays", 0.45);
+  await expect(overlay).toContainText("Density at r0 =");
+  await expect(overlay).toContainText("Prior");
+  await expect(overlay).toContainText("Gen 4");
+
+  const cell = await hover("cells", 0.45);
+  await expect(cell).toContainText("Mass at r0 ≈");
+
+  // Inside the fitted window both series show; past it only the median.
+  const fitted = await hover("projections", 0.1);
+  await expect(fitted).toContainText("Median");
+  await expect(fitted).toContainText("Observed");
+  const projected = await hover("projections", 0.6);
+  await expect(projected).toContainText("Median");
+  await expect(projected).not.toContainText("Observed");
 });
 
 test("exports particles, trajectories, and every plot as one zip", async ({
@@ -64,6 +104,12 @@ test("exports particles, trajectories, and every plot as one zip", async ({
   expect(new Set(trajectories.slice(1).map((r) => r.split(",")[0]))).toEqual(
     new Set(["0", "1", "2", "3", "4"]),
   );
+
+  const posteriors = strFromU8(entries["posteriors.csv"]!).split("\n");
+  expect(posteriors[0]).toBe(
+    "generation,parameter,mean,sd,q05,q25,median,q75,q95",
+  );
+  expect(posteriors).toHaveLength(1 + 5 * 2);
 
   const plots = names.filter((n) => n.startsWith("plots/"));
   expect(charts).toBeGreaterThan(0);

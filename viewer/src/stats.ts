@@ -178,3 +178,63 @@ export function quantileBands(
   }
   return { x: Array.from({ length }, (_, i) => i), bands };
 }
+
+export interface ParamSummary {
+  mean: number;
+  // Weighted standard deviation with the same reliability-weights correction
+  // as the KDE bandwidth.
+  sd: number;
+  q05: number;
+  q25: number;
+  median: number;
+  q75: number;
+  q95: number;
+}
+
+// Weighted moments and quantiles of one parameter. Weights need not be
+// normalized. Every field is NaN for an empty population.
+export function weightedSummary(
+  values: number[],
+  weights: number[],
+): ParamSummary {
+  const w = normalizedWeights(weights);
+  let mean = values.length > 0 ? 0 : NaN;
+  for (let i = 0; i < values.length; i++) mean += w[i]! * values[i]!;
+  let biasedVar = 0;
+  let sumW2 = 0;
+  for (let i = 0; i < values.length; i++) {
+    const d = values[i]! - mean;
+    biasedVar += w[i]! * d * d;
+    sumW2 += w[i]! * w[i]!;
+  }
+  const denom = 1 - sumW2;
+  const variance = denom > 1e-12 ? biasedVar / denom : biasedVar;
+  const [q05, q25, median, q75, q95] = weightedQuantiles(
+    values,
+    w,
+    [0.05, 0.25, 0.5, 0.75, 0.95],
+  ) as [number, number, number, number, number];
+  return {
+    mean,
+    sd: values.length > 0 ? Math.sqrt(variance) : NaN,
+    q05,
+    q25,
+    median,
+    q75,
+    q95,
+  };
+}
+
+// One summary per parameter, in declaration order.
+export function parameterSummaries(
+  paramCount: number,
+  particles: { params: number[]; weight: number }[],
+): ParamSummary[] {
+  const weights = particles.map((p) => p.weight);
+  return Array.from({ length: paramCount }, (_, i) =>
+    weightedSummary(
+      particles.map((p) => p.params[i]!),
+      weights,
+    ),
+  );
+}

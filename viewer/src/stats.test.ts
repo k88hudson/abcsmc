@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { quantileBands, weightedQuantiles } from "./stats";
+import {
+  parameterSummaries,
+  quantileBands,
+  weightedQuantiles,
+  weightedSummary,
+} from "./stats";
 
 describe("weightedQuantiles", () => {
   it("matches plain quantiles under equal weights", () => {
@@ -33,5 +38,41 @@ describe("quantileBands", () => {
     expect(x).toEqual([0, 1, 2]);
     expect(bands[0]).toEqual([0, 10, 20]);
     expect(bands[1]).toEqual([2, 12, 20]);
+  });
+});
+
+describe("weightedSummary", () => {
+  it("matches the sample mean and sd under equal weights", () => {
+    const s = weightedSummary([1, 2, 3, 4, 5], [1, 1, 1, 1, 1]);
+    expect(s.mean).toBeCloseTo(3);
+    expect(s.sd).toBeCloseTo(Math.sqrt(2.5));
+    expect(s.median).toBe(3);
+    expect(s.q05).toBe(1);
+    expect(s.q95).toBe(5);
+  });
+
+  it("follows unnormalized weights", () => {
+    const s = weightedSummary([0, 10], [1, 3]);
+    expect(s.mean).toBeCloseTo(7.5);
+    expect(s.median).toBe(10);
+    expect(s.q25).toBe(0);
+  });
+
+  it("is NaN for an empty population", () => {
+    const s = weightedSummary([], []);
+    expect(s.mean).toBeNaN();
+    expect(s.sd).toBeNaN();
+    expect(s.median).toBeNaN();
+  });
+});
+
+describe("parameterSummaries", () => {
+  it("summarizes each parameter by position", () => {
+    const [a, b] = parameterSummaries(2, [
+      { params: [1, 10], weight: 0.5 },
+      { params: [3, 30], weight: 0.5 },
+    ]);
+    expect(a!.mean).toBeCloseTo(2);
+    expect(b!.mean).toBeCloseTo(20);
   });
 });

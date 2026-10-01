@@ -50,7 +50,10 @@ and the run's distance provides `Distance::observed`.
 - `src/run.ts`: event types and the reducer that folds lines into a
   `RunState`, plus `LineSplitter` for chunked reads.
 - `src/sources.ts`: file drop, one-shot file read, and file-handle tailing.
-- `src/stats.ts`: weighted histogram and KDE.
+- `src/stats.ts`: weighted histogram, KDE, quantiles, and the per-parameter
+  summaries behind the Posteriors table.
+- `src/ChartTip.vue`: the hover tooltip body shared by every chart, a heading
+  plus one named row per series.
 - `src/App.vue`: the page. Charts are `LineChart` and `BarChart` from
   `cfasim-ui`.
 - `e2e/fixtures/renewal.jsonl`: a renewal run shrunk with

@@ -1,9 +1,10 @@
-// "Export outputs": the run's particles and trajectories as CSV and every
-// rendered chart as a PNG, bundled into one zip.
+// "Export outputs": the run's particles, trajectories, and posterior
+// summaries as CSV and every rendered chart as a PNG, bundled into one zip.
 
 import { strToU8, zipSync } from "fflate";
 import { columnsToCsv, fileStem } from "./csv";
 import { completedGenerations, type RunState } from "./run";
+import { parameterSummaries, type ParamSummary } from "./stats";
 
 // One row per particle of every completed generation, parameters as columns.
 export function particlesCsv(run: RunState): string {
@@ -54,6 +55,38 @@ export function trajectoriesCsv(run: RunState): string {
     { header: "particle", values: particle },
     { header: "index", values: index },
     { header: "value", values: value },
+  ]);
+}
+
+export const SUMMARY_COLUMNS = [
+  "mean",
+  "sd",
+  "q05",
+  "q25",
+  "median",
+  "q75",
+  "q95",
+] as const satisfies readonly (keyof ParamSummary)[];
+
+// Long format: one row per parameter of every completed generation.
+export function posteriorsCsv(run: RunState): string {
+  const generation: number[] = [];
+  const parameter: string[] = [];
+  const rows: ParamSummary[] = [];
+  for (const g of completedGenerations(run)) {
+    parameterSummaries(run.params.length, g.particles).forEach((s, i) => {
+      generation.push(g.generation);
+      parameter.push(run.params[i]!.name);
+      rows.push(s);
+    });
+  }
+  return columnsToCsv([
+    { header: "generation", values: generation },
+    { header: "parameter", values: parameter },
+    ...SUMMARY_COLUMNS.map((key) => ({
+      header: key,
+      values: rows.map((s) => s[key]),
+    })),
   ]);
 }
 
@@ -177,6 +210,7 @@ export async function exportOutputs(
   const zip = buildZip([
     { path: "particles.csv", data: particlesCsv(run) },
     { path: "trajectories.csv", data: trajectoriesCsv(run) },
+    { path: "posteriors.csv", data: posteriorsCsv(run) },
     ...(await chartImages(root)),
   ]);
   return { name: `${fileStem(run.id, "outputs") || "outputs"}.zip`, zip };

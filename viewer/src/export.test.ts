@@ -1,6 +1,11 @@
 import { strFromU8, unzipSync } from "fflate";
 import { describe, expect, it } from "vitest";
-import { buildZip, particlesCsv, trajectoriesCsv } from "./export";
+import {
+  buildZip,
+  particlesCsv,
+  posteriorsCsv,
+  trajectoriesCsv,
+} from "./export";
 import { applyLine, emptyRun } from "./run";
 
 const stats = {
@@ -78,6 +83,34 @@ describe("trajectoriesCsv", () => {
       "0,1,1,4",
       "1,0,0,5",
     ]);
+  });
+});
+
+describe("posteriorsCsv", () => {
+  it("writes one row per parameter of each completed generation", () => {
+    const rows = posteriorsCsv(finishedRun())
+      .split("\n")
+      .map((r) => r.split(","));
+    expect(rows[0]).toEqual([
+      "generation",
+      "parameter",
+      "mean",
+      "sd",
+      "q05",
+      "q25",
+      "median",
+      "q75",
+      "q95",
+    ]);
+    expect(rows.slice(1).map((r) => r.slice(0, 2))).toEqual([
+      ["0", "a"],
+      ["0", "k"],
+      ["1", "a"],
+      ["1", "k"],
+    ]);
+    // Generation 1 of "a": 0.7 at weight 0.25, 0.8 at weight 0.75.
+    expect(Number(rows[3]![2])).toBeCloseTo(0.775);
+    expect(rows[3]!.slice(4)).toEqual(["0.7", "0.7", "0.8", "0.8", "0.8"]);
   });
 });
 

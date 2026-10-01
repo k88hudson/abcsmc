@@ -1,9 +1,10 @@
 <script setup lang="ts">
 import { computed, onScopeDispose, reactive, ref } from "vue";
 import { Button, SidebarLayout, Toggle } from "cfasim-ui/components";
-import { BarChart, LineChart } from "cfasim-ui/charts";
+import { BarChart, DataTable, LineChart } from "cfasim-ui/charts";
+import ChartTip from "./ChartTip.vue";
 import { columnsToCsv, fileStem } from "./csv";
-import { downloadBytes, exportOutputs } from "./export";
+import { downloadBytes, exportOutputs, SUMMARY_COLUMNS } from "./export";
 import {
   applyLine,
   completedGenerations,
@@ -21,6 +22,7 @@ import {
 import {
   extent,
   normalizedWeights,
+  parameterSummaries,
   quantileBands,
   weightedHistogram,
   weightedKde,
@@ -202,6 +204,7 @@ const liveCharts = computed(() => {
     const data = paramHistogram(i, g.live, weights).map((b) => b.weight);
     return {
       name: param.name,
+      index: i,
       categories,
       data,
       title: `${param.name}: accepted so far in generation ${g.generation} (unweighted)`,
@@ -378,6 +381,7 @@ const overlays = computed(() => {
       });
       return {
         name: param.name,
+        index: i,
         kind: param.kind,
         series,
         categories: [] as string[],
@@ -403,6 +407,7 @@ const overlays = computed(() => {
     const categories = categoriesFor(i);
     return {
       name: param.name,
+      index: i,
       kind: param.kind,
       series,
       categories,
@@ -415,6 +420,50 @@ const overlays = computed(() => {
         ]),
     };
   });
+});
+
+const SUMMARY_LABELS: Record<(typeof SUMMARY_COLUMNS)[number], string> = {
+  mean: "Mean",
+  sd: "SD",
+  q05: "5%",
+  q25: "25%",
+  median: "Median",
+  q75: "75%",
+  q95: "95%",
+};
+
+// Weighted summary of every parameter in the shown generation.
+const summaryTable = computed(() => {
+  const g = shownGeneration.value;
+  if (!g) return null;
+  const summaries = parameterSummaries(run.params.length, g.particles);
+  const names = run.params.map((p) => p.name);
+  const data: Record<string, (string | number)[]> = { parameter: names };
+  for (const key of SUMMARY_COLUMNS) data[key] = summaries.map((s) => s[key]);
+  return {
+    label: generationLabel(g),
+    data,
+    columnConfig: {
+      parameter: { label: "Parameter" },
+      ...Object.fromEntries(
+        SUMMARY_COLUMNS.map((key) => [
+          key,
+          {
+            label: SUMMARY_LABELS[key],
+            align: "right" as const,
+            width: "small" as const,
+            format: (v: string | number | boolean) => fmt(Number(v)),
+          },
+        ]),
+      ),
+    },
+    filename: fileStem(run.id, "posteriors", generationLabel(g)),
+    // Full precision, unlike the rounded cells.
+    csv: () =>
+      columnsToCsv(
+        Object.entries(data).map(([header, values]) => ({ header, values })),
+      ),
+  };
 });
 
 const cells = computed(() => {
@@ -440,6 +489,7 @@ const cells = computed(() => {
         );
         return {
           name: param.name,
+          index: i,
           categories,
           prior: priorMass,
           posterior: posteriorMass,
@@ -461,6 +511,23 @@ const cells = computed(() => {
     };
   });
 });
+
+// Heading for a histogram tooltip: bins of a real parameter are labeled by
+// their center, integer bins by their value.
+function binHeading(paramIndex: number, category: string): string {
+  const param = run.params[paramIndex]!;
+  return `${param.name} ${param.kind === "int" ? "=" : "≈"} ${category}`;
+}
+
+// Projection tooltips: the chart reports the nearest observed point even
+// past the end of the observed series, so drop it there. Observed is series 1.
+function withinObserved<T extends { seriesIndex: number }>(
+  values: T[],
+  index: number,
+): T[] {
+  const n = run.observed?.length ?? 0;
+  return values.filter((v) => v.seriesIndex !== 1 || index < n);
+}
 
 function generationLabel(g: Generation): string {
   return g.generation === 0 && g.tolerance === null
@@ -648,7 +715,15 @@ function fmt(x: number, digits = 3): string {
               :title="chart.title"
               :csv="chart.csv"
               tooltip-trigger="hover"
-            />
+            >
+              <template #tooltip="t">
+                <ChartTip
+                  :heading="`Mass at ${binHeading(chart.index, t.category)}`"
+                  :values="t.values"
+                  :labels="['Accepted']"
+                />
+              </template>
+            </BarChart>
           </div>
         </div>
       </section>
@@ -702,9 +777,32 @@ function fmt(x: number, digits = 3): string {
               :title="chart.title"
               :csv="chart.csv"
               tooltip-trigger="hover"
-            />
+            >
+              <template #tooltip="t">
+                <ChartTip
+                  :heading="`Index ${t.index}`"
+                  :values="withinObserved(t.values, t.index)"
+                  :labels="chart.series.map((s) => s.legend)"
+                />
+              </template>
+            </LineChart>
           </div>
         </div>
+      </section>
+
+      <section v-if="summaryTable" data-testid="posteriors">
+        <h2>
+          Posteriors
+          <small
+            >{{ summaryTable.label }}, weighted mean, SD, and quantiles</small
+          >
+        </h2>
+        <DataTable
+          :data="summaryTable.data"
+          :column-config="summaryTable.columnConfig"
+          :filename="summaryTable.filename"
+          :csv="summaryTable.csv"
+        />
       </section>
 
       <section v-if="completed.length" data-testid="overlays">
@@ -725,8 +823,15 @@ function fmt(x: number, digits = 3): string {
               :title="o.title"
               :csv="o.csv"
               tooltip-trigger="hover"
-              tooltip-value-format="%.3f"
-            />
+            >
+              <template #tooltip="t">
+                <ChartTip
+                  :heading="`Density at ${o.name} = ${t.xLabel ?? ''}`"
+                  :values="t.values"
+                  :labels="o.series.map((s) => s.legend)"
+                />
+              </template>
+            </LineChart>
             <BarChart
               v-else
               :categories="o.categories"
@@ -740,8 +845,15 @@ function fmt(x: number, digits = 3): string {
               :title="o.title"
               :csv="o.csv"
               tooltip-trigger="hover"
-              tooltip-value-format="%.3f"
-            />
+            >
+              <template #tooltip="t">
+                <ChartTip
+                  :heading="`Mass at ${binHeading(o.index, t.category)}`"
+                  :values="t.values"
+                  :labels="o.series.map((s) => s.legend)"
+                />
+              </template>
+            </BarChart>
           </div>
         </div>
       </section>
@@ -805,8 +917,15 @@ function fmt(x: number, digits = 3): string {
                   :title="p.title"
                   :csv="p.csv"
                   tooltip-trigger="hover"
-                  tooltip-value-format="%.3f"
-                />
+                >
+                  <template #tooltip="t">
+                    <ChartTip
+                      :heading="`Mass at ${binHeading(p.index, t.category)}`"
+                      :values="t.values"
+                      :labels="['Prior', 'Posterior']"
+                    />
+                  </template>
+                </BarChart>
               </div>
             </div>
           </div>
