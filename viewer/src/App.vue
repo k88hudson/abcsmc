@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onScopeDispose, reactive, ref, watch } from "vue";
+import { computed, onMounted, onScopeDispose, reactive, ref, watch } from "vue";
 import { Button, SelectBox, SidebarLayout, Toggle } from "cfasim-ui/components";
 import { BarChart, DataTable, LineChart } from "cfasim-ui/charts";
 import ChartTip from "./ChartTip.vue";
@@ -14,6 +14,13 @@ import {
   type Generation,
   type RunState,
 } from "./run";
+import {
+  canRead,
+  clearRecent,
+  loadRecent,
+  requestRead,
+  saveRecent,
+} from "./recent";
 import {
   pickRunFile,
   readFile,
@@ -36,6 +43,8 @@ const palette = computed(() => chartPalette(isDark.value));
 const run = reactive<RunState>(emptyRun());
 const source = ref<string | null>(null);
 const live = ref(false);
+// The run shown is the copy kept from an earlier visit, not a fresh read.
+const savedCopy = ref(false);
 const error = ref<string | null>(null);
 const dragging = ref(false);
 const selectedGeneration = ref<number | null>(null);
@@ -56,6 +65,8 @@ function reset() {
   Object.assign(run, emptyRun());
   error.value = null;
   live.value = false;
+  savedCopy.value = false;
+  reopenable.value = null;
   selectedGeneration.value = null;
   allGenerations.value = false;
 }
@@ -64,9 +75,7 @@ function onLines(lines: string[]) {
   for (const line of lines) applyLine(run, line);
 }
 
-async function openLive() {
-  const handle = await pickRunFile();
-  if (!handle) return;
+function watchHandle(handle: FileSystemFileHandle) {
   reset();
   source.value = handle.name;
   live.value = true;
@@ -75,9 +84,20 @@ async function openLive() {
   });
 }
 
-async function loadFile(file: File) {
+function openHandle(handle: FileSystemFileHandle) {
+  watchHandle(handle);
+  void saveRecent({ kind: "handle", name: handle.name, handle });
+}
+
+async function openPicked() {
+  const handle = await pickRunFile();
+  if (handle) openHandle(handle);
+}
+
+async function readSnapshot(file: File, saved = false) {
   reset();
   source.value = file.name;
+  savedCopy.value = saved;
   try {
     await readFile(file, onLines);
   } catch (e) {
@@ -85,15 +105,78 @@ async function loadFile(file: File) {
   }
 }
 
+async function loadFile(file: File) {
+  void saveRecent({ kind: "file", name: file.name, file });
+  await readSnapshot(file);
+}
+
+// A handle from an earlier visit that the browser will not read until the
+// user allows it again.
+const reopenable = ref<FileSystemFileHandle | null>(null);
+const fileInput = ref<HTMLInputElement | null>(null);
+
+async function reopen() {
+  const handle = reopenable.value;
+  if (!handle) return;
+  try {
+    if (!(await requestRead(handle))) return;
+  } catch (e) {
+    error.value = String(e);
+    return;
+  }
+  watchHandle(handle);
+}
+
+// Empties the page and forgets the remembered run.
+function clearRun() {
+  reset();
+  source.value = null;
+  if (fileInput.value) fileInput.value.value = "";
+  void clearRecent();
+}
+
+onMounted(async () => {
+  const recent = await loadRecent();
+  // Something was opened while the lookup was pending.
+  if (!recent || source.value) return;
+  if (recent.kind === "file") {
+    await readSnapshot(recent.file, true);
+  } else if (await canRead(recent.handle).catch(() => false)) {
+    watchHandle(recent.handle);
+  } else {
+    reopenable.value = recent.handle;
+  }
+});
+
 function onFileInput(event: Event) {
   const file = (event.target as HTMLInputElement).files?.[0];
   if (file) void loadFile(file);
 }
 
+// A dropped file comes with a handle where the browser has them, so it is
+// followed and remembered like a picked one.
 function onDrop(event: DragEvent) {
   dragging.value = false;
+  const item = event.dataTransfer?.items?.[0] as
+    | (DataTransferItem & {
+        getAsFileSystemHandle?: () => Promise<FileSystemHandle | null>;
+      })
+    | undefined;
   const file = event.dataTransfer?.files?.[0];
-  if (file) void loadFile(file);
+  // Must be asked for before the handler returns.
+  const pending = item?.getAsFileSystemHandle?.();
+  if (!pending) {
+    if (file) void loadFile(file);
+    return;
+  }
+  void pending
+    .then((handle) => {
+      if (handle?.kind === "file") openHandle(handle as FileSystemFileHandle);
+      else if (file) void loadFile(file);
+    })
+    .catch(() => {
+      if (file) void loadFile(file);
+    });
 }
 
 async function exportAll() {
@@ -862,22 +945,34 @@ function fmt(x: number, digits = 3): string {
       <section class="side-section">
         <h3>Source</h3>
         <div class="source-buttons">
-          <Button v-if="supportsFilePicker()" @click="openLive"
-            >Watch a run (live)</Button
+          <Button v-if="reopenable" data-testid="reopen" @click="reopen"
+            >Reopen {{ reopenable.name }}</Button
           >
-          <label class="file-label">
-            <span class="file-label__text">{{
-              supportsFilePicker()
-                ? "Or load a finished run:"
-                : "Load a finished run:"
-            }}</span>
-            <input
-              type="file"
-              accept=".jsonl,application/jsonl"
-              aria-label="Load run.jsonl"
-              @change="onFileInput"
-            />
-          </label>
+          <div class="source-row">
+            <Button
+              v-if="supportsFilePicker()"
+              :variant="reopenable ? 'secondary' : undefined"
+              @click="openPicked"
+              >Open run.jsonl</Button
+            >
+            <!-- Browsers without file handles can only read the file once. -->
+            <label v-else class="file-label">
+              <span class="file-label__text">Load a finished run:</span>
+              <input
+                type="file"
+                accept=".jsonl,application/jsonl"
+                ref="fileInput"
+                aria-label="Load run.jsonl"
+                @change="onFileInput"
+              />
+            </label>
+            <Button
+              v-if="source || reopenable"
+              variant="secondary"
+              @click="clearRun"
+              >Clear</Button
+            >
+          </div>
         </div>
         <p v-if="error" class="error">{{ error }}</p>
       </section>
@@ -887,7 +982,8 @@ function fmt(x: number, digits = 3): string {
         <dl class="facts">
           <dt v-if="source">File</dt>
           <dd v-if="source" class="source-name">
-            {{ source }}<span v-if="live"> (watching)</span>
+            {{ source }}<span v-if="live"> (watching)</span
+            ><span v-else-if="savedCopy"> (saved copy)</span>
           </dd>
           <dt>Status</dt>
           <dd data-testid="status">{{ statusLabel }}</dd>
@@ -974,11 +1070,16 @@ function fmt(x: number, digits = 3): string {
       <Toggle v-model="logScale" label="Log scale" class="log-toggle" />
 
       <section v-if="!run.id" class="empty">
-        <p>
-          Pick the <code>run.jsonl</code> a calibration is writing. "Watch a
-          run" re-reads the file as the run appends to it, so generations fill
-          in as they complete. "Load a finished run" (or dropping the file here)
-          reads it once.
+        <p v-if="supportsFilePicker()">
+          Open the <code>run.jsonl</code> a calibration wrote, or drop it here.
+          The page keeps re-reading the file, so a run that is still going fills
+          in as its generations complete, and it reopens the file on your next
+          visit.
+        </p>
+        <p v-else>
+          Load the <code>run.jsonl</code> a calibration wrote, or drop it here.
+          This browser can only read the file once, so load it again to see a
+          run's later generations.
         </p>
       </section>
 
@@ -1359,6 +1460,12 @@ h4 small {
 .source-buttons {
   display: flex;
   flex-direction: column;
+  gap: 0.5rem;
+}
+.source-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
   gap: 0.5rem;
 }
 .file-label {

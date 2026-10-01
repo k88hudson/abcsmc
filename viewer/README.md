@@ -13,11 +13,14 @@ plz ui build      # static site in dist/
 
 Then, in the page:
 
-- **Open run.jsonl (live)**, in Chromium browsers: picks the file with the
-  File System Access API and re-reads it every second, so a calibration that
-  is still appending to it shows generations filling in.
-- **Load a copy** or drop the file on the page, in any browser: a one-shot
-  read of a finished run.
+- **Open run.jsonl** or drop the file on the page, in Chromium browsers:
+  opens the file with the File System Access API and re-reads it every
+  second, so a calibration that is still appending to it shows generations
+  filling in, and a finished one is simply read. The file is reopened on the
+  next visit.
+- **Load a finished run** or drop the file, in other browsers: a one-shot
+  read. A copy is kept so the next visit shows the same run.
+- **Clear** empties the page and forgets the remembered run.
 
 The renewal example writes `examples/output/runs/<timestamp>/run.jsonl`:
 
@@ -50,6 +53,8 @@ and the run's distance provides `Distance::observed`.
 - `src/run.ts`: event types and the reducer that folds lines into a
   `RunState`, plus `LineSplitter` for chunked reads.
 - `src/sources.ts`: file drop, one-shot file read, and file-handle tailing.
+- `src/recent.ts`: remembers the last run in IndexedDB so the next visit
+  reopens it (the file handle of a watched run, a saved copy of a loaded one).
 - `src/stats.ts`: weighted histogram, KDE, quantiles, and the per-parameter
   summaries behind the Posteriors table.
 - `src/ChartTip.vue`: the hover tooltip body shared by every chart, a heading
