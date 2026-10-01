@@ -1,7 +1,9 @@
 <script setup lang="ts">
 import { computed, onScopeDispose, reactive, ref } from "vue";
-import { Button, SidebarLayout } from "cfasim-ui/components";
+import { Button, SidebarLayout, Toggle } from "cfasim-ui/components";
 import { BarChart, LineChart } from "cfasim-ui/charts";
+import { columnsToCsv, fileStem } from "./csv";
+import { downloadBytes, exportOutputs } from "./export";
 import {
   applyLine,
   completedGenerations,
@@ -34,6 +36,10 @@ const live = ref(false);
 const error = ref<string | null>(null);
 const dragging = ref(false);
 const selectedGeneration = ref<number | null>(null);
+const logScale = ref(false);
+const main = ref<HTMLElement | null>(null);
+const exporting = ref(false);
+const yScaleType = computed(() => (logScale.value ? "log" : "linear"));
 let stopTail: (() => void) | null = null;
 
 function reset() {
@@ -79,6 +85,19 @@ function onDrop(event: DragEvent) {
   dragging.value = false;
   const file = event.dataTransfer?.files?.[0];
   if (file) void loadFile(file);
+}
+
+async function exportAll() {
+  if (!main.value || exporting.value) return;
+  exporting.value = true;
+  try {
+    const { name, zip } = await exportOutputs(run, main.value);
+    downloadBytes(zip, name, "application/zip");
+  } catch (e) {
+    error.value = String(e);
+  } finally {
+    exporting.value = false;
+  }
 }
 
 onScopeDispose(() => stopTail?.());
@@ -178,11 +197,22 @@ const liveCharts = computed(() => {
   const g = current.value;
   if (!g || g.live.length === 0) return [];
   const weights = g.live.map(() => 1 / g.live.length);
-  return run.params.map((param, i) => ({
-    name: param.name,
-    categories: categoriesFor(i),
-    data: paramHistogram(i, g.live, weights).map((b) => b.weight),
-  }));
+  return run.params.map((param, i) => {
+    const categories = categoriesFor(i);
+    const data = paramHistogram(i, g.live, weights).map((b) => b.weight);
+    return {
+      name: param.name,
+      categories,
+      data,
+      title: `${param.name}: accepted so far in generation ${g.generation} (unweighted)`,
+      filename: fileStem(run.id, `gen ${g.generation}`, param.name, "live"),
+      csv: () =>
+        columnsToCsv([
+          { header: param.name, values: categories },
+          { header: "mass", values: data },
+        ]),
+    };
+  });
 });
 
 const liveFraction = computed(() => {
@@ -226,9 +256,21 @@ const projectionCharts = computed(() =>
         legend: "Observed",
       });
     }
+    const observed = run.observed;
     return {
       label: projection.label,
-      count: projection.trajectories.length,
+      title: `Projection: ${projection.label} (${projection.trajectories.length} particles)`,
+      filename: fileStem(run.id, "projection", projection.label),
+      csv: () =>
+        columnsToCsv([
+          { header: "index", values: x },
+          ...(observed ? [{ header: "observed", values: observed }] : []),
+          { header: "q05", values: bands[0]! },
+          { header: "q25", values: bands[1]! },
+          { header: "median", values: bands[2]! },
+          { header: "q75", values: bands[3]! },
+          { header: "q95", values: bands[4]! },
+        ]),
       series,
       areas: [
         {
@@ -288,6 +330,29 @@ const trajectorySeries = computed(() => {
   return series;
 });
 
+const trajectoryDownload = computed(() => {
+  const g = shownGeneration.value;
+  const observed = run.observed;
+  const trajectories = g?.trajectories ?? [];
+  let length = observed?.length ?? 0;
+  for (const t of trajectories) length = Math.max(length, t.values.length);
+  return {
+    title: g
+      ? `Trajectories: ${generationLabel(g)}, ${trajectories.length} of ${g.particles.length} particles`
+      : "Trajectories",
+    filename: fileStem(run.id, "trajectories", g ? generationLabel(g) : null),
+    csv: () =>
+      columnsToCsv([
+        { header: "index", values: Array.from({ length }, (_, i) => i) },
+        ...(observed ? [{ header: "observed", values: observed }] : []),
+        ...trajectories.map((t) => ({
+          header: `particle_${t.particle}`,
+          values: t.values,
+        })),
+      ]),
+  };
+});
+
 const overlays = computed(() => {
   const gens = completed.value;
   const n = gens.length;
@@ -316,6 +381,13 @@ const overlays = computed(() => {
         kind: param.kind,
         series,
         categories: [] as string[],
+        title: `Posterior of ${param.name} across generations`,
+        filename: fileStem(run.id, "posterior", param.name),
+        csv: () =>
+          columnsToCsv([
+            { header: param.name, values: series[0]?.x ?? [] },
+            ...series.map((s) => ({ header: s.legend, values: s.data })),
+          ]),
       };
     }
     const series = gens.map((g, k) => ({
@@ -328,11 +400,19 @@ const overlays = computed(() => {
       opacity: 0.35 + (0.6 * k) / Math.max(1, n - 1),
       legend: generationLabel(g),
     }));
+    const categories = categoriesFor(i);
     return {
       name: param.name,
       kind: param.kind,
       series,
-      categories: categoriesFor(i),
+      categories,
+      title: `Posterior of ${param.name} across generations`,
+      filename: fileStem(run.id, "posterior", param.name),
+      csv: () =>
+        columnsToCsv([
+          { header: param.name, values: categories },
+          ...series.map((s) => ({ header: s.legend, values: s.data })),
+        ]),
     };
   });
 });
@@ -348,17 +428,36 @@ const cells = computed(() => {
     return {
       generation: g,
       label: generationLabel(g),
-      params: run.params.map((param, i) => ({
-        name: param.name,
-        categories: categoriesFor(i),
-        prior: prior
+      params: run.params.map((param, i) => {
+        const categories = categoriesFor(i);
+        const priorMass = prior
           ? paramHistogram(i, prior.particles, priorWeights).map(
               (b) => b.weight,
             )
-          : [],
-        posterior: paramHistogram(i, g.particles, weights).map((b) => b.weight),
-        kde: param.kind === "real" ? kdeOverlay(i, g.particles, weights) : null,
-      })),
+          : [];
+        const posteriorMass = paramHistogram(i, g.particles, weights).map(
+          (b) => b.weight,
+        );
+        return {
+          name: param.name,
+          categories,
+          prior: priorMass,
+          posterior: posteriorMass,
+          kde:
+            param.kind === "real" ? kdeOverlay(i, g.particles, weights) : null,
+          title:
+            g === prior
+              ? `${param.name}: prior`
+              : `${param.name}: prior and ${generationLabel(g)} posterior`,
+          filename: fileStem(run.id, generationLabel(g), param.name),
+          csv: () =>
+            columnsToCsv([
+              { header: param.name, values: categories },
+              { header: "prior", values: priorMass },
+              { header: "posterior", values: posteriorMass },
+            ]),
+        };
+      }),
     };
   });
 });
@@ -381,6 +480,15 @@ function fmt(x: number, digits = 3): string {
 
 <template>
   <SidebarLayout>
+    <template #topbar>
+      <Button
+        v-if="completed.length"
+        variant="secondary"
+        :disabled="exporting"
+        @click="exportAll"
+        >{{ exporting ? "Exporting…" : "Export outputs" }}</Button
+      >
+    </template>
     <template #sidebar>
       <section class="side-section">
         <h3>Source</h3>
@@ -479,6 +587,7 @@ function fmt(x: number, digits = 3): string {
     </template>
 
     <div
+      ref="main"
       class="main"
       :class="{ dragging }"
       @dragover.prevent="dragging = true"
@@ -486,6 +595,7 @@ function fmt(x: number, digits = 3): string {
       @drop.prevent="onDrop"
     >
       <h1>abcsmc viewer</h1>
+      <Toggle v-model="logScale" label="Log scale" class="log-toggle" />
 
       <section v-if="!run.id" class="empty">
         <p>
@@ -522,12 +632,14 @@ function fmt(x: number, digits = 3): string {
         </p>
         <div v-if="liveCharts.length" class="grid">
           <div v-for="chart in liveCharts" :key="chart.name" class="cell">
-            <p class="label">{{ chart.name }}, accepted so far (unweighted)</p>
             <BarChart
               :categories="chart.categories"
               :series="[{ data: chart.data, color: palette.posterior }]"
               :height="160"
-              :menu="false"
+              :filename="chart.filename"
+              :data-export-name="chart.filename"
+              :title="chart.title"
+              :csv="chart.csv"
               tooltip-trigger="hover"
             />
           </div>
@@ -551,7 +663,11 @@ function fmt(x: number, digits = 3): string {
           :height="260"
           x-label="Index"
           y-label="Value"
-          :menu="false"
+          :y-scale-type="yScaleType"
+          :filename="trajectoryDownload.filename"
+          :data-export-name="trajectoryDownload.filename"
+          :title="trajectoryDownload.title"
+          :csv="trajectoryDownload.csv"
         />
       </section>
 
@@ -567,16 +683,17 @@ function fmt(x: number, digits = 3): string {
             :key="chart.label"
             class="projection"
           >
-            <h4>
-              {{ chart.label }} <small>{{ chart.count }} particles</small>
-            </h4>
             <LineChart
               :series="chart.series"
               :areas="chart.areas"
               :height="280"
               x-label="Index"
               y-label="Value"
-              :menu="false"
+              :y-scale-type="yScaleType"
+              :filename="chart.filename"
+              :data-export-name="chart.filename"
+              :title="chart.title"
+              :csv="chart.csv"
               tooltip-trigger="hover"
             />
           </div>
@@ -590,14 +707,16 @@ function fmt(x: number, digits = 3): string {
         </p>
         <div class="grid">
           <div v-for="o in overlays" :key="o.name" class="cell">
-            <p class="label">{{ o.name }}</p>
             <LineChart
               v-if="o.kind === 'real'"
               :series="o.series"
               :height="240"
               :x-label="o.name"
               y-label="density"
-              :menu="false"
+              :filename="o.filename"
+              :data-export-name="o.filename"
+              :title="o.title"
+              :csv="o.csv"
               tooltip-trigger="hover"
               tooltip-value-format="%.3f"
             />
@@ -609,7 +728,10 @@ function fmt(x: number, digits = 3): string {
               :height="240"
               :x-label="o.name"
               y-label="mass"
-              :menu="false"
+              :filename="o.filename"
+              :data-export-name="o.filename"
+              :title="o.title"
+              :csv="o.csv"
               tooltip-trigger="hover"
               tooltip-value-format="%.3f"
             />
@@ -640,7 +762,6 @@ function fmt(x: number, digits = 3): string {
             </h4>
             <div class="grid" :style="{ '--cols': Math.min(paramCount, 3) }">
               <div v-for="p in cell.params" :key="p.name" class="cell">
-                <p class="label">{{ p.name }}</p>
                 <BarChart
                   :categories="p.categories"
                   :series="[
@@ -672,7 +793,10 @@ function fmt(x: number, digits = 3): string {
                       : []
                   "
                   :height="170"
-                  :menu="false"
+                  :filename="p.filename"
+                  :data-export-name="p.filename"
+                  :title="p.title"
+                  :csv="p.csv"
                   tooltip-trigger="hover"
                   tooltip-value-format="%.3f"
                 />
@@ -710,6 +834,10 @@ h4 small {
   color: var(--color-text-muted, #64748b);
   font-size: 0.8em;
   margin-left: 0.5em;
+}
+.log-toggle {
+  font-size: 0.85rem;
+  margin-bottom: 1rem;
 }
 .side-section {
   margin-bottom: 1.25rem;
@@ -798,11 +926,6 @@ h4 small {
     grid-template-columns: 1fr;
   }
 }
-.label {
-  margin: 0 0 0.25rem;
-  font-size: 0.85rem;
-  color: var(--color-text-muted, #64748b);
-}
 .cells {
   display: flex;
   flex-direction: column;
@@ -817,8 +940,7 @@ h4 small {
 .gen-cell.selected {
   border-color: #2563eb;
 }
-.gen-cell h4,
-.projection h4 {
+.gen-cell h4 {
   margin: 0 0 0.5rem;
 }
 .empty {
