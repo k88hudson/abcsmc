@@ -1258,6 +1258,7 @@ function fmt(x: number, digits = 3): string {
           <div v-if="liveCharts.length" class="grid">
             <div v-for="chart in liveCharts" :key="chart.name" class="cell">
               <BarChart
+                zoom
                 :categories="chart.categories"
                 :series="[{ data: chart.data, color: palette.posterior }]"
                 :height="160"
@@ -1331,6 +1332,7 @@ function fmt(x: number, digits = 3): string {
               class="cell"
             >
               <LineChart
+                zoom
                 :series="chart.series"
                 :height="trajectoryCharts.length > 1 ? 300 : 260"
                 x-label="Index"
@@ -1354,6 +1356,7 @@ function fmt(x: number, digits = 3): string {
           <div class="grid">
             <div v-for="o in overlays" :key="o.name" class="cell">
               <LineChart
+                zoom
                 v-if="o.kind === 'real'"
                 :series="o.series"
                 :height="240"
@@ -1374,6 +1377,7 @@ function fmt(x: number, digits = 3): string {
                 </template>
               </LineChart>
               <BarChart
+                zoom
                 v-else
                 :categories="o.categories"
                 :series="o.series"
@@ -1423,6 +1427,7 @@ function fmt(x: number, digits = 3): string {
               <div class="grid" :style="{ '--cols': Math.min(paramCount, 3) }">
                 <div v-for="p in cell.params" :key="p.name" class="cell">
                   <BarChart
+                    zoom
                     :categories="p.categories"
                     :series="[
                       {
@@ -1516,6 +1521,7 @@ function fmt(x: number, digits = 3): string {
               class="cell"
             >
               <LineChart
+                zoom
                 :series="panel.series"
                 :height="280"
                 :x-label="panel.xLabel"
@@ -1539,6 +1545,7 @@ function fmt(x: number, digits = 3): string {
       >
         <p class="muted">{{ targetChart.points }} observed points</p>
         <LineChart
+          zoom
           :series="targetChart.series"
           :height="220"
           x-label="Index"
@@ -1601,6 +1608,7 @@ function fmt(x: number, digits = 3): string {
             class="projection"
           >
             <LineChart
+              zoom
               :series="chart.series"
               :areas="chart.areas"
               :height="280"

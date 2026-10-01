@@ -265,6 +265,40 @@ test.describe("without file handles", () => {
     await expect(section).not.toContainText("a ~ b");
   });
 
+  test("dragging across a chart zooms it, and the reset button undoes it", async ({
+    page,
+  }) => {
+    await page.goto("/");
+    await page.getByLabel("Load run.jsonl").setInputFiles(fixture);
+    await expect(page.getByTestId("status")).toHaveText("Finished");
+
+    const chart = page
+      .getByTestId("trajectories")
+      .locator(".line-chart-wrapper");
+    await chart.scrollIntoViewIfNeeded();
+    const ticks = () =>
+      chart
+        .locator("svg text")
+        .filter({ hasText: /^[\d,.]+$/ })
+        .allTextContents();
+    const before = await ticks();
+    const reset = chart.getByRole("button", { name: /reset/i });
+    await expect(reset).toHaveCount(0);
+
+    const box = (await chart.boundingBox())!;
+    const y = box.y + box.height * 0.6;
+    await page.mouse.move(box.x + box.width * 0.4, y);
+    await page.mouse.down();
+    await page.mouse.move(box.x + box.width * 0.6, y, { steps: 5 });
+    await page.mouse.up();
+    await expect(reset).toBeVisible();
+    expect(await ticks()).not.toEqual(before);
+
+    await reset.click();
+    await expect(reset).toHaveCount(0);
+    expect(await ticks()).toEqual(before);
+  });
+
   test("chart tooltips name their series", async ({ page }) => {
     await page.goto("/");
     await page.getByLabel("Load run.jsonl").setInputFiles(fixture);
