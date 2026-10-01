@@ -32,12 +32,14 @@ test.describe("without file handles", () => {
     );
 
     await expect(page.getByTestId("live")).toHaveCount(0);
-    await expect(page.getByTestId("target")).toContainText(
-      "42 observed points",
-    );
-    await expect(
-      page.getByTestId("target").locator(".line-chart-wrapper"),
-    ).toHaveCount(1);
+    // Target data sits on its own tab, as a chart and a table.
+    const target = page.getByTestId("target");
+    await expect(target).toBeHidden();
+    await page.getByRole("tab", { name: "Target data" }).click();
+    await expect(target).toContainText("42 observed points");
+    await expect(target.locator(".line-chart-wrapper")).toHaveCount(1);
+    await expect(target.locator("tbody tr")).toHaveCount(42);
+    await page.getByRole("tab", { name: "Calibration" }).click();
     await expect(page.getByTestId("trajectories")).toContainText("Gen 4");
     await expect(
       page
@@ -51,11 +53,21 @@ test.describe("without file handles", () => {
     await expect(posteriors.locator("tbody tr").first()).toContainText(
       "Exponential(rate = 1)",
     );
+    // Priors sit on their own tab.
+    await expect(page.getByTestId("priors")).toBeHidden();
+    await page.getByRole("tab", { name: "Priors" }).click();
     await expect(page.getByTestId("priors")).toContainText(
       "DiscreteUniform(a = 1, b = 4)",
     );
+    await page.getByRole("tab", { name: "Calibration" }).click();
+    // Projections sit on their own tab.
+    await expect(page.getByTestId("projections")).toBeHidden();
+    await page.getByRole("tab", { name: "Projections" }).click();
+    await expect(page.getByTestId("projections")).toBeVisible();
     await expect(page.getByTestId("projections")).toContainText("baseline");
     await expect(page.getByTestId("projections")).toContainText("20 particles");
+    await expect(page.getByTestId("trajectories")).toBeHidden();
+    await page.getByRole("tab", { name: "Calibration" }).click();
     await expect(page.getByTestId("cells").locator(".gen-cell")).toHaveCount(5);
 
     await page.locator(".gen-table tbody tr").nth(1).click();
@@ -196,6 +208,7 @@ test.describe("without file handles", () => {
     await expect(cell).toContainText("Mass at r0 ≈");
 
     // Inside the fitted window both series show; past it only the median.
+    await page.getByRole("tab", { name: "Projections" }).click();
     const fitted = await hover("projections", 0.1);
     await expect(fitted).toContainText("Median");
     await expect(fitted).toContainText("Observed");

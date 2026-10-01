@@ -53,6 +53,7 @@ const showAccepted = ref(true);
 const showRejected = ref(true);
 const showObserved = ref(true);
 const allGenerations = ref(false);
+const tab = ref("calibration");
 const facet = ref(false);
 const main = ref<HTMLElement | null>(null);
 const exporting = ref(false);
@@ -69,6 +70,7 @@ function reset() {
   reopenable.value = null;
   selectedGeneration.value = null;
   allGenerations.value = false;
+  tab.value = "calibration";
 }
 
 function onLines(lines: string[]) {
@@ -193,6 +195,25 @@ async function exportAll() {
 }
 
 onScopeDispose(() => stopTail?.());
+
+// Target data, priors, and projections each get a tab once the log has them.
+const tabs = computed(() => {
+  const extra = [
+    ...(run.observed ? [{ value: "target", label: "Target data" }] : []),
+    ...(run.params.some((p) => p.prior)
+      ? [{ value: "priors", label: "Priors" }]
+      : []),
+    ...(run.projections.length > 0
+      ? [{ value: "projections", label: "Projections" }]
+      : []),
+  ];
+  return extra.length > 0
+    ? [{ value: "calibration", label: "Calibration" }, ...extra]
+    : undefined;
+});
+const activeTab = computed(() =>
+  tabs.value?.some((t) => t.value === tab.value) ? tab.value : "calibration",
+);
 
 const completed = computed(() => completedGenerations(run));
 const current = computed(() => currentGeneration(run));
@@ -394,6 +415,7 @@ const targetChart = computed(() => {
   const x = observed.map((_, i) => i);
   return {
     points: observed.length,
+    table: { index: x, observed },
     title: "Target data",
     filename: fileStem(run.id, "target"),
     series: [
@@ -931,7 +953,7 @@ function fmt(x: number, digits = 3): string {
 </script>
 
 <template>
-  <SidebarLayout>
+  <SidebarLayout v-model:tab="tab" :tabs="tabs">
     <template #topbar>
       <Button
         v-if="completed.length"
@@ -1069,82 +1091,276 @@ function fmt(x: number, digits = 3): string {
       </p>
       <Toggle v-model="logScale" label="Log scale" class="log-toggle" />
 
-      <section v-if="!run.id" class="empty">
-        <p v-if="supportsFilePicker()">
-          Open the <code>run.jsonl</code> a calibration wrote, or drop it here.
-          The page keeps re-reading the file, so a run that is still going fills
-          in as its generations complete, and it reopens the file on your next
-          visit.
-        </p>
-        <p v-else>
-          Load the <code>run.jsonl</code> a calibration wrote, or drop it here.
-          This browser can only read the file once, so load it again to see a
-          run's later generations.
-        </p>
-      </section>
+      <div
+        class="tab-panel"
+        :class="{ parked: activeTab !== 'calibration' }"
+        :inert="activeTab !== 'calibration'"
+      >
+        <section v-if="!run.id" class="empty">
+          <p v-if="supportsFilePicker()">
+            Open the <code>run.jsonl</code> a calibration wrote, or drop it
+            here. The page keeps re-reading the file, so a run that is still
+            going fills in as its generations complete, and it reopens the file
+            on your next visit.
+          </p>
+          <p v-else>
+            Load the <code>run.jsonl</code> a calibration wrote, or drop it
+            here. This browser can only read the file once, so load it again to
+            see a run's later generations.
+          </p>
+        </section>
 
-      <section v-if="current" class="live" data-testid="live">
-        <h2>
-          Generation {{ current.generation }}
-          <small>tolerance {{ tolerance(current) }}</small>
-        </h2>
-        <div
-          class="progress"
-          role="progressbar"
-          :aria-valuenow="current.liveAccepted"
-          :aria-valuemax="run.nParticles"
-        >
+        <section v-if="current" class="live" data-testid="live">
+          <h2>
+            Generation {{ current.generation }}
+            <small>tolerance {{ tolerance(current) }}</small>
+          </h2>
           <div
-            class="progress__fill"
-            :style="{ width: `${liveFraction * 100}%` }"
-          />
-        </div>
-        <p class="muted">
-          {{ current.liveAccepted }} / {{ run.nParticles }} accepted from
-          {{ current.liveAttempts }} simulations
-          <template v-if="current.liveAttempts > 0">
-            ({{ fmt(current.liveAccepted / current.liveAttempts) }} acceptance
-            so far)
-          </template>
-        </p>
-        <div v-if="liveCharts.length" class="grid">
-          <div v-for="chart in liveCharts" :key="chart.name" class="cell">
-            <BarChart
-              :categories="chart.categories"
-              :series="[{ data: chart.data, color: palette.posterior }]"
-              :height="160"
-              :filename="chart.filename"
-              :data-export-name="chart.filename"
-              :title="chart.title"
-              :csv="chart.csv"
-              tooltip-trigger="hover"
-            >
-              <template #tooltip="t">
-                <ChartTip
-                  :heading="`Mass at ${binHeading(chart.index, t.category)}`"
-                  :values="t.values"
-                  :labels="['Accepted']"
-                />
-              </template>
-            </BarChart>
+            class="progress"
+            role="progressbar"
+            :aria-valuenow="current.liveAccepted"
+            :aria-valuemax="run.nParticles"
+          >
+            <div
+              class="progress__fill"
+              :style="{ width: `${liveFraction * 100}%` }"
+            />
           </div>
-        </div>
-      </section>
+          <p class="muted">
+            {{ current.liveAccepted }} / {{ run.nParticles }} accepted from
+            {{ current.liveAttempts }} simulations
+            <template v-if="current.liveAttempts > 0">
+              ({{ fmt(current.liveAccepted / current.liveAttempts) }} acceptance
+              so far)
+            </template>
+          </p>
+          <div v-if="liveCharts.length" class="grid">
+            <div v-for="chart in liveCharts" :key="chart.name" class="cell">
+              <BarChart
+                :categories="chart.categories"
+                :series="[{ data: chart.data, color: palette.posterior }]"
+                :height="160"
+                :filename="chart.filename"
+                :data-export-name="chart.filename"
+                :title="chart.title"
+                :csv="chart.csv"
+                tooltip-trigger="hover"
+              >
+                <template #tooltip="t">
+                  <ChartTip
+                    :heading="`Mass at ${binHeading(chart.index, t.category)}`"
+                    :values="t.values"
+                    :labels="['Accepted']"
+                  />
+                </template>
+              </BarChart>
+            </div>
+          </div>
+        </section>
 
-      <section v-if="priorsTable" data-testid="priors">
-        <h2>Priors</h2>
-        <DataTable
-          :data="priorsTable.data"
-          :column-config="priorsTable.columnConfig"
-          :filename="priorsTable.filename"
-        />
-      </section>
+        <section
+          v-if="trajectoryView && hasTrajectoryData"
+          data-testid="trajectories"
+        >
+          <h2>
+            Trajectories
+            <small>{{ trajectorySubtitle(trajectoryView) }}</small>
+          </h2>
+          <div class="trajectory-controls">
+            <SelectBox
+              v-model="generationChoice"
+              :options="generationOptions"
+              label="Generation"
+              hide-label
+              class="generation-select"
+            />
+            <Toggle
+              v-if="allGenerations"
+              v-model="facet"
+              label="Facet by generation"
+            />
+          </div>
+          <p class="muted legend-hint">
+            Click a legend item to hide or show it.
+          </p>
+          <div
+            ref="trajectoryChart"
+            :class="{ grid: trajectoryCharts.length > 1 }"
+            @click="onLegendClick"
+            @mousemove="onLegendHover"
+          >
+            <div
+              v-for="chart in trajectoryCharts"
+              :key="chart.key"
+              class="cell"
+            >
+              <LineChart
+                :series="chart.series"
+                :height="trajectoryCharts.length > 1 ? 300 : 260"
+                x-label="Index"
+                y-label="Value"
+                :y-scale-type="yScaleType"
+                :filename="chart.filename"
+                :data-export-name="chart.filename"
+                :title="chart.title"
+                :csv="chart.csv"
+              />
+            </div>
+          </div>
+        </section>
 
-      <section v-if="targetChart" data-testid="target">
-        <h2>
-          Target data
-          <small>{{ targetChart.points }} observed points</small>
-        </h2>
+        <section v-if="summaryTable" data-testid="posteriors">
+          <h2>
+            Posteriors
+            <small
+              >{{ summaryTable.label }}, weighted mean, SD, and quantiles</small
+            >
+          </h2>
+          <DataTable
+            :data="summaryTable.data"
+            :column-config="summaryTable.columnConfig"
+            :filename="summaryTable.filename"
+            :csv="summaryTable.csv"
+          />
+        </section>
+
+        <section v-if="completed.length" data-testid="overlays">
+          <h2>Posterior across generations</h2>
+          <p class="muted">
+            Prior in grey, later generations
+            {{ isDark ? "lighter" : "darker" }}.
+          </p>
+          <div class="grid">
+            <div v-for="o in overlays" :key="o.name" class="cell">
+              <LineChart
+                v-if="o.kind === 'real'"
+                :series="o.series"
+                :height="240"
+                :x-label="o.name"
+                y-label="density"
+                :filename="o.filename"
+                :data-export-name="o.filename"
+                :title="o.title"
+                :csv="o.csv"
+                tooltip-trigger="hover"
+              >
+                <template #tooltip="t">
+                  <ChartTip
+                    :heading="`Density at ${o.name} = ${t.xLabel ?? ''}`"
+                    :values="t.values"
+                    :labels="o.series.map((s) => s.legend)"
+                  />
+                </template>
+              </LineChart>
+              <BarChart
+                v-else
+                :categories="o.categories"
+                :series="o.series"
+                layout="overlay"
+                :height="240"
+                :x-label="o.name"
+                y-label="mass"
+                :filename="o.filename"
+                :data-export-name="o.filename"
+                :title="o.title"
+                :csv="o.csv"
+                tooltip-trigger="hover"
+              >
+                <template #tooltip="t">
+                  <ChartTip
+                    :heading="`Mass at ${binHeading(o.index, t.category)}`"
+                    :values="t.values"
+                    :labels="o.series.map((s) => s.legend)"
+                  />
+                </template>
+              </BarChart>
+            </div>
+          </div>
+        </section>
+
+        <section v-if="cells.length" data-testid="cells">
+          <h2>Per generation</h2>
+          <div class="cells">
+            <div
+              v-for="cell in cells"
+              :key="cell.generation.generation"
+              class="gen-cell"
+              :class="{
+                selected:
+                  shownGeneration?.generation === cell.generation.generation,
+              }"
+              @click="selectGeneration(cell.generation.generation)"
+            >
+              <h4>
+                {{ cell.label }}
+                <small v-if="cell.generation.stats">
+                  tol. {{ tolerance(cell.generation) }}, acceptance
+                  {{ fmt(cell.generation.stats.acceptance_ratio) }}, ESS
+                  {{ fmt(cell.generation.stats.ess, 0) }}
+                </small>
+              </h4>
+              <div class="grid" :style="{ '--cols': Math.min(paramCount, 3) }">
+                <div v-for="p in cell.params" :key="p.name" class="cell">
+                  <BarChart
+                    :categories="p.categories"
+                    :series="[
+                      {
+                        data: p.prior,
+                        color: palette.prior,
+                        blendMode: palette.overlapBlend,
+                        legend: 'Prior',
+                      },
+                      {
+                        data: p.posterior,
+                        color: palette.posterior,
+                        blendMode: palette.overlapBlend,
+                        legend: 'Posterior',
+                      },
+                    ]"
+                    layout="overlay"
+                    :summary-lines="
+                      p.kde
+                        ? [
+                            {
+                              x: p.kde.x,
+                              data: p.kde.data,
+                              color: palette.kde,
+                              strokeWidth: 2,
+                              dots: false,
+                            },
+                          ]
+                        : []
+                    "
+                    :height="170"
+                    :filename="p.filename"
+                    :data-export-name="p.filename"
+                    :title="p.title"
+                    :csv="p.csv"
+                    tooltip-trigger="hover"
+                  >
+                    <template #tooltip="t">
+                      <ChartTip
+                        :heading="`Mass at ${binHeading(p.index, t.category)}`"
+                        :values="t.values"
+                        :labels="['Prior', 'Posterior']"
+                      />
+                    </template>
+                  </BarChart>
+                </div>
+              </div>
+            </div>
+          </div>
+        </section>
+      </div>
+
+      <section
+        v-if="targetChart"
+        class="tab-panel"
+        :class="{ parked: activeTab !== 'target' }"
+        :inert="activeTab !== 'target'"
+        data-testid="target"
+      >
+        <p class="muted">{{ targetChart.points }} observed points</p>
         <LineChart
           :series="targetChart.series"
           :height="220"
@@ -1165,55 +1381,38 @@ function fmt(x: number, digits = 3): string {
             />
           </template>
         </LineChart>
+        <DataTable
+          class="target-table"
+          :data="targetChart.table"
+          :column-config="{
+            index: { label: 'Index', width: 'small' },
+            observed: { label: 'Observed', align: 'right', width: 'small' },
+          }"
+          :filename="targetChart.filename"
+        />
       </section>
 
       <section
-        v-if="trajectoryView && hasTrajectoryData"
-        data-testid="trajectories"
+        v-if="priorsTable"
+        class="tab-panel"
+        :class="{ parked: activeTab !== 'priors' }"
+        :inert="activeTab !== 'priors'"
+        data-testid="priors"
       >
-        <h2>
-          Trajectories
-          <small>{{ trajectorySubtitle(trajectoryView) }}</small>
-        </h2>
-        <div class="trajectory-controls">
-          <SelectBox
-            v-model="generationChoice"
-            :options="generationOptions"
-            label="Generation"
-            hide-label
-            class="generation-select"
-          />
-          <Toggle
-            v-if="allGenerations"
-            v-model="facet"
-            label="Facet by generation"
-          />
-        </div>
-        <p class="muted legend-hint">Click a legend item to hide or show it.</p>
-        <div
-          ref="trajectoryChart"
-          :class="{ grid: trajectoryCharts.length > 1 }"
-          @click="onLegendClick"
-          @mousemove="onLegendHover"
-        >
-          <div v-for="chart in trajectoryCharts" :key="chart.key" class="cell">
-            <LineChart
-              :series="chart.series"
-              :height="trajectoryCharts.length > 1 ? 300 : 260"
-              x-label="Index"
-              y-label="Value"
-              :y-scale-type="yScaleType"
-              :filename="chart.filename"
-              :data-export-name="chart.filename"
-              :title="chart.title"
-              :csv="chart.csv"
-            />
-          </div>
-        </div>
+        <DataTable
+          :data="priorsTable.data"
+          :column-config="priorsTable.columnConfig"
+          :filename="priorsTable.filename"
+        />
       </section>
 
-      <section v-if="projectionCharts.length" data-testid="projections">
-        <h2>Projections</h2>
+      <section
+        v-if="projectionCharts.length"
+        class="tab-panel"
+        :class="{ parked: activeTab !== 'projections' }"
+        :inert="activeTab !== 'projections'"
+        data-testid="projections"
+      >
         <p class="muted">
           Posterior particles simulated forward. Line is the weighted median,
           bands are the central 50% and 90%.
@@ -1248,148 +1447,6 @@ function fmt(x: number, digits = 3): string {
           </div>
         </div>
       </section>
-
-      <section v-if="summaryTable" data-testid="posteriors">
-        <h2>
-          Posteriors
-          <small
-            >{{ summaryTable.label }}, weighted mean, SD, and quantiles</small
-          >
-        </h2>
-        <DataTable
-          :data="summaryTable.data"
-          :column-config="summaryTable.columnConfig"
-          :filename="summaryTable.filename"
-          :csv="summaryTable.csv"
-        />
-      </section>
-
-      <section v-if="completed.length" data-testid="overlays">
-        <h2>Posterior across generations</h2>
-        <p class="muted">
-          Prior in grey, later generations {{ isDark ? "lighter" : "darker" }}.
-        </p>
-        <div class="grid">
-          <div v-for="o in overlays" :key="o.name" class="cell">
-            <LineChart
-              v-if="o.kind === 'real'"
-              :series="o.series"
-              :height="240"
-              :x-label="o.name"
-              y-label="density"
-              :filename="o.filename"
-              :data-export-name="o.filename"
-              :title="o.title"
-              :csv="o.csv"
-              tooltip-trigger="hover"
-            >
-              <template #tooltip="t">
-                <ChartTip
-                  :heading="`Density at ${o.name} = ${t.xLabel ?? ''}`"
-                  :values="t.values"
-                  :labels="o.series.map((s) => s.legend)"
-                />
-              </template>
-            </LineChart>
-            <BarChart
-              v-else
-              :categories="o.categories"
-              :series="o.series"
-              layout="overlay"
-              :height="240"
-              :x-label="o.name"
-              y-label="mass"
-              :filename="o.filename"
-              :data-export-name="o.filename"
-              :title="o.title"
-              :csv="o.csv"
-              tooltip-trigger="hover"
-            >
-              <template #tooltip="t">
-                <ChartTip
-                  :heading="`Mass at ${binHeading(o.index, t.category)}`"
-                  :values="t.values"
-                  :labels="o.series.map((s) => s.legend)"
-                />
-              </template>
-            </BarChart>
-          </div>
-        </div>
-      </section>
-
-      <section v-if="cells.length" data-testid="cells">
-        <h2>Per generation</h2>
-        <div class="cells">
-          <div
-            v-for="cell in cells"
-            :key="cell.generation.generation"
-            class="gen-cell"
-            :class="{
-              selected:
-                shownGeneration?.generation === cell.generation.generation,
-            }"
-            @click="selectGeneration(cell.generation.generation)"
-          >
-            <h4>
-              {{ cell.label }}
-              <small v-if="cell.generation.stats">
-                tol. {{ tolerance(cell.generation) }}, acceptance
-                {{ fmt(cell.generation.stats.acceptance_ratio) }}, ESS
-                {{ fmt(cell.generation.stats.ess, 0) }}
-              </small>
-            </h4>
-            <div class="grid" :style="{ '--cols': Math.min(paramCount, 3) }">
-              <div v-for="p in cell.params" :key="p.name" class="cell">
-                <BarChart
-                  :categories="p.categories"
-                  :series="[
-                    {
-                      data: p.prior,
-                      color: palette.prior,
-                      blendMode: palette.overlapBlend,
-                      legend: 'Prior',
-                    },
-                    {
-                      data: p.posterior,
-                      color: palette.posterior,
-                      blendMode: palette.overlapBlend,
-                      legend: 'Posterior',
-                    },
-                  ]"
-                  layout="overlay"
-                  :summary-lines="
-                    p.kde
-                      ? [
-                          {
-                            x: p.kde.x,
-                            data: p.kde.data,
-                            color: palette.kde,
-                            strokeWidth: 2,
-                            dots: false,
-                          },
-                        ]
-                      : []
-                  "
-                  :height="170"
-                  :filename="p.filename"
-                  :data-export-name="p.filename"
-                  :title="p.title"
-                  :csv="p.csv"
-                  tooltip-trigger="hover"
-                >
-                  <template #tooltip="t">
-                    <ChartTip
-                      :heading="`Mass at ${binHeading(p.index, t.category)}`"
-                      :values="t.values"
-                      :labels="['Prior', 'Posterior']"
-                    />
-                  </template>
-                </BarChart>
-              </div>
-            </div>
-          </div>
-        </div>
-      </section>
     </div>
   </SidebarLayout>
 </template>
@@ -1405,6 +1462,16 @@ function fmt(x: number, digits = 3): string {
 .main {
   min-height: 80svh;
   min-height: 80vh;
+}
+/* The tab that is not showing stays laid out at full width, so its charts
+   keep their size and "Export outputs" still includes them. */
+.tab-panel.parked {
+  height: 0;
+  overflow: hidden;
+  visibility: hidden;
+}
+.target-table {
+  margin-top: 1rem;
 }
 .main > h1 {
   margin-top: 0;

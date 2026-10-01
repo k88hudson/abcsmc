@@ -59,7 +59,8 @@ and the run's distance provides `Distance::observed`.
   summaries behind the Posteriors table.
 - `src/ChartTip.vue`: the hover tooltip body shared by every chart, a heading
   plus one named row per series.
-- `src/App.vue`: the page. Charts are `LineChart` and `BarChart` from
+- `src/App.vue`: the page, in tabs: Calibration, and Target data, Priors, and
+  Projections when the log has them. Charts are `LineChart` and `BarChart` from
   `cfasim-ui`.
 - `e2e/fixtures/renewal.jsonl`: a renewal run shrunk with
   `scripts/shrink-run.mjs` for the Playwright test.
