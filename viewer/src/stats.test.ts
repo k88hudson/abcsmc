@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   axisScale,
+  finitePoints,
   parameterSummaries,
   quantileBands,
   weightedCorrelation,
@@ -115,5 +116,14 @@ describe("axisScale", () => {
     const large = axisScale("population", 2.5e6);
     expect(large.label).toBe("population (×10⁶)");
     expect(2.5e6 * large.factor).toBeCloseTo(2.5);
+  });
+});
+
+describe("finitePoints", () => {
+  it("keeps each value at its index and leaves out the missing ones", () => {
+    expect(finitePoints([null, null, 3, NaN, 5])).toEqual({
+      x: [2, 4],
+      data: [3, 5],
+    });
   });
 });

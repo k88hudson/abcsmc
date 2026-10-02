@@ -87,7 +87,8 @@ export interface RunState {
   nGenerations: number;
   quantiles: number[] | null;
   params: ParamMeta[];
-  observed: number[] | null;
+  // Non-finite values are written as null: points the series does not have.
+  observed: (number | null)[] | null;
   generations: Generation[];
   projections: Projection[];
   status: "empty" | "running" | "finished";
@@ -107,7 +108,7 @@ export type RunEvent =
       n_generations: number;
       quantiles: number[] | null;
       params: ParamMeta[];
-      observed: number[] | null;
+      observed: (number | null)[] | null;
     }
   | { type: "generation_started"; generation: number; tolerance: number | null }
   | {

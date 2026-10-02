@@ -111,11 +111,11 @@ export function normalizedWeights(weights: number[]): number[] {
     : weights.map(() => 1 / weights.length);
 }
 
-export function extent(values: number[]): [number, number] {
+export function extent(values: (number | null)[]): [number, number] {
   let lo = Infinity;
   let hi = -Infinity;
   for (const v of values) {
-    if (!Number.isFinite(v)) continue;
+    if (v === null || !Number.isFinite(v)) continue;
     if (v < lo) lo = v;
     if (v > hi) hi = v;
   }
@@ -151,6 +151,23 @@ export function weightedQuantiles(
     }
     return pairs[pairs.length - 1]![0];
   });
+}
+
+// A series' points as chart coordinates, leaving out the indices it has no
+// value at, so a series that starts late or has gaps is not drawn at zero.
+export function finitePoints(values: (number | null)[]): {
+  x: number[];
+  data: number[];
+} {
+  const x: number[] = [];
+  const data: number[] = [];
+  values.forEach((v, i) => {
+    if (v !== null && Number.isFinite(v)) {
+      x.push(i);
+      data.push(v);
+    }
+  });
+  return { x, data };
 }
 
 export interface QuantileBands {

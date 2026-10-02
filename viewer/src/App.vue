@@ -30,6 +30,7 @@ import {
 import {
   axisScale,
   extent,
+  finitePoints,
   normalizedWeights,
   parameterSummaries,
   quantileBands,
@@ -365,8 +366,7 @@ const projectionCharts = computed(() =>
     ];
     if (run.observed) {
       series.push({
-        x: run.observed.map((_, i) => i),
-        data: run.observed,
+        ...finitePoints(run.observed),
         color: palette.value.observed,
         strokeWidth: 2.5,
         dots: true,
@@ -415,16 +415,15 @@ const projectionCharts = computed(() =>
 const targetChart = computed(() => {
   const observed = run.observed;
   if (!observed) return null;
-  const x = observed.map((_, i) => i);
+  const points = finitePoints(observed);
   return {
-    points: observed.length,
-    table: { index: x, observed },
+    points: points.x.length,
+    table: { index: points.x, observed: points.data },
     title: "Target data",
     filename: fileStem(run.id, "target"),
     series: [
       {
-        x,
-        data: observed,
+        ...points,
         color: palette.value.observed,
         strokeWidth: 2,
         dots: true,
@@ -433,8 +432,8 @@ const targetChart = computed(() => {
     ],
     csv: () =>
       columnsToCsv([
-        { header: "index", values: x },
-        { header: "observed", values: observed },
+        { header: "index", values: points.x },
+        { header: "observed", values: points.data },
       ]),
   };
 });
@@ -535,7 +534,7 @@ const generationChoice = computed({
 const trajectoryFrame = computed(() => {
   const g = trajectoryView.value;
   const collect = (onlyShown: boolean) => {
-    const all: number[][] = [];
+    const all: (number | null)[][] = [];
     if (run.observed && (showObserved.value || !onlyShown))
       all.push(run.observed);
     if (g && (showAccepted.value || !onlyShown))
@@ -611,8 +610,7 @@ function trajectorySeries(g: TrajectoryView) {
   }
   if (run.observed && showObserved.value) {
     series.push({
-      x: run.observed.map((_, i) => i),
-      data: run.observed,
+      ...finitePoints(run.observed),
       color: palette.value.observed,
       strokeWidth: 2.5,
       dots: true,
