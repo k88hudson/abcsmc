@@ -528,17 +528,24 @@ const generationChoice = computed({
   },
 });
 
-// The extent of everything the trajectories section can show. The legend's
-// key series span it, so the axes stay put as series are turned off and on,
-// and facets share them.
+// The extent of the series that are turned on, across the whole section.
+// The legend's key series span it, so facets share axes that fit what is
+// showing. With everything off it falls back to the full extent, which keeps
+// the legend there to turn things back on.
 const trajectoryFrame = computed(() => {
   const g = trajectoryView.value;
-  const all: number[][] = [];
-  if (run.observed) all.push(run.observed);
-  if (g) {
-    for (const t of g.trajectories) all.push(t.values);
-    for (const t of g.rejected) all.push(t.values);
-  }
+  const collect = (onlyShown: boolean) => {
+    const all: number[][] = [];
+    if (run.observed && (showObserved.value || !onlyShown))
+      all.push(run.observed);
+    if (g && (showAccepted.value || !onlyShown))
+      for (const t of g.trajectories) all.push(t.values);
+    if (g && (showRejected.value || !onlyShown))
+      for (const t of g.rejected) all.push(t.values);
+    return all;
+  };
+  const shown = collect(true);
+  const all = shown.length > 0 ? shown : collect(false);
   let xMax = 0;
   let yMin = Infinity;
   let yMax = -Infinity;
@@ -959,15 +966,12 @@ const summaryTable = computed(() => {
   const summaries = parameterSummaries(run.params.length, g.particles);
   const names = run.params.map((p) => p.name);
   const data: Record<string, (string | number)[]> = { parameter: names };
-  if (run.params.some((p) => p.prior))
-    data.prior = run.params.map((p) => (p.prior ? priorLabel(p.prior) : ""));
   for (const key of SUMMARY_COLUMNS) data[key] = summaries.map((s) => s[key]);
   return {
     label: generationLabel(g),
     data,
     columnConfig: {
       parameter: { label: "Parameter" },
-      prior: { label: "Prior", width: 220 },
       ...Object.fromEntries(
         SUMMARY_COLUMNS.map((key) => [
           key,
@@ -1654,6 +1658,11 @@ function fmt(x: number, digits = 3): string {
   height: 0;
   overflow: hidden;
   visibility: hidden;
+}
+/* cfasim-ui's table sizes to its content, so without a cap it is clipped
+   on a narrow screen instead of scrolling inside its wrapper. */
+:deep(.TableOuter) {
+  max-width: 100%;
 }
 .target-table {
   margin-top: 1rem;

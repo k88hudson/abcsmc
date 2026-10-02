@@ -50,9 +50,8 @@ test.describe("without file handles", () => {
     await expect(posteriors).toContainText("Gen 4");
     await expect(posteriors.locator("tbody tr")).toHaveCount(2);
     await expect(posteriors.locator("tbody tr").first()).toContainText("r0");
-    await expect(posteriors.locator("tbody tr").first()).toContainText(
-      "Exponential(rate = 1)",
-    );
+    // The priors are on their own tab, not repeated here.
+    await expect(posteriors).not.toContainText("Exponential");
     // Priors sit on their own tab.
     await expect(page.getByTestId("priors")).toBeHidden();
     await page.getByRole("tab", { name: "Priors" }).click();
@@ -72,6 +71,29 @@ test.describe("without file handles", () => {
 
     await page.locator(".gen-table tbody tr").nth(1).click();
     await expect(page.getByTestId("trajectories")).toContainText("Gen 1");
+  });
+
+  test("the posteriors table scrolls sideways on a narrow screen", async ({
+    page,
+  }) => {
+    await page.setViewportSize({ width: 360, height: 800 });
+    await page.goto("/");
+    await page.getByLabel("Load run.jsonl").setInputFiles(fixture);
+    await expect(page.getByTestId("status")).toHaveText("Finished");
+
+    const wrapper = page.getByTestId("posteriors").locator(".TableWrapper");
+    const sizes = await wrapper.evaluate((el) => ({
+      scroll: el.scrollWidth,
+      client: el.clientWidth,
+      right: el.getBoundingClientRect().right,
+    }));
+    expect(sizes.scroll).toBeGreaterThan(sizes.client);
+    expect(sizes.right).toBeLessThanOrEqual(360);
+
+    await wrapper.evaluate((el) => (el.scrollLeft = el.scrollWidth));
+    await expect(
+      wrapper.getByRole("columnheader", { name: "95%" }),
+    ).toBeInViewport({ ratio: 1 });
   });
 
   test("the last run is reopened on the next visit until it is cleared", async ({
@@ -97,7 +119,7 @@ test.describe("without file handles", () => {
     await expect(page.getByTestId("status")).toHaveText("No run loaded");
   });
 
-  test("legend items turn trajectories off and on without moving the axes", async ({
+  test("legend items turn trajectories off and on, and the axes follow", async ({
     page,
   }) => {
     await page.goto("/");
@@ -117,15 +139,28 @@ test.describe("without file handles", () => {
     await expect(lines).toHaveCount(all - 20);
     await item("Accepted").click();
     await expect(lines).toHaveCount(all - 40);
+    // The axes fit what is left, the observed series.
+    expect(await texts()).not.toEqual(before);
     await item("Rejected").click();
     await expect(lines).toHaveCount(all - 20);
 
-    // Hidden items stay in the legend, struck through, and the ticks hold.
+    // Hidden items stay in the legend, struck through.
     await expect(item("Accepted")).toHaveCSS(
       "text-decoration-line",
       "line-through",
     );
     await expect(item("Rejected")).toHaveCSS("text-decoration-line", "none");
+
+    // With everything off the legend is still there to turn it back on.
+    await item("Rejected").click();
+    await item("Observed").click();
+    await expect(item("Observed")).toHaveCSS(
+      "text-decoration-line",
+      "line-through",
+    );
+    for (const label of ["Observed", "Accepted", "Rejected"])
+      await item(label).click();
+    await expect(lines).toHaveCount(all);
     expect(await texts()).toEqual(before);
   });
 
