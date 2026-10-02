@@ -199,7 +199,7 @@ macro_rules! __draw_read {
 /// | `normal_prior!` | `mean = .., std_dev = ..` |
 /// | `exponential_prior!` | `rate = ..` or `scale = ..` |
 /// | `log_normal_prior!` | `mu = .., sigma = ..` |
-/// | `gamma_prior!` | `shape = .., scale = ..` or `shape = .., rate = ..` |
+/// | `gamma_prior!` | `shape = .., scale = ..`, `shape = .., rate = ..`, or `mean = .., shape = ..` |
 /// | `weibull_prior!` | `shape = .., scale = ..` |
 /// | `beta_prior!` | `alpha = .., beta = ..` or `alpha = .., beta = .., min = .., max = ..` |
 /// | `discrete_uniform_prior!` | `a = .., b = ..` |
@@ -264,9 +264,12 @@ macro_rules! gamma_prior {
     (shape = $shape:expr, rate = $rate:expr $(,)?) => {
         $crate::RealPrior::gamma_shape_rate($shape, $rate)
     };
+    (mean = $mean:expr, shape = $shape:expr $(,)?) => {
+        $crate::RealPrior::gamma_mean_shape($mean, $shape)
+    };
     ($($other:tt)*) => {
         ::core::compile_error!(
-            "gamma_prior! takes `shape = .., scale = ..` or `shape = .., rate = ..`"
+            "gamma_prior! takes `shape = .., scale = ..`, `shape = .., rate = ..`, or `mean = .., shape = ..`"
         )
     };
 }

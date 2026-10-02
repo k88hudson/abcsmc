@@ -7,8 +7,8 @@
 //!
 //! Where a family has more than one common parameterization, each has its own
 //! constructor named for its parameters and there is no unqualified one: the
-//! exponential by rate or scale, the gamma by shape and scale or shape and
-//! rate, and the negative binomial by `r` and `p` or mean and dispersion. A
+//! exponential by rate or scale, the gamma by shape and scale, shape and
+//! rate, or mean and shape, and the negative binomial by `r` and `p` or mean and dispersion. A
 //! prior prints and serializes with the parameters it was given.
 
 use std::fmt;
@@ -218,6 +218,25 @@ impl RealPrior {
             scale,
             rate,
             [("shape", shape.into()), ("rate", rate.into())],
+        )
+    }
+
+    /// Gamma with the given mean and shape (scale `mean / shape`).
+    pub fn gamma_mean_shape(mean: f64, shape: f64) -> Result<Self, PriorError> {
+        positive("Gamma", "mean", mean)?;
+        positive("Gamma", "shape", shape)?;
+        let (scale, rate) = (mean / shape, shape / mean);
+        if !(scale.is_finite() && scale > 0.0 && rate.is_finite() && rate > 0.0) {
+            return Err(PriorError::new(
+                "Gamma",
+                format!("mean {mean} and shape {shape} give a scale of {scale}, out of range"),
+            ));
+        }
+        Self::gamma_declared(
+            shape,
+            scale,
+            rate,
+            [("mean", mean.into()), ("shape", shape.into())],
         )
     }
 
@@ -485,7 +504,7 @@ fn positive(family: &'static str, name: &str, value: f64) -> Result<(), PriorErr
 /// | `Normal` | `mean`, `std_dev` |
 /// | `Exponential` | `rate` or `scale` |
 /// | `LogNormal` | `mu`, `sigma` |
-/// | `Gamma` | `shape`, then `scale` or `rate` |
+/// | `Gamma` | `shape`, then `scale`, `rate`, or `mean` |
 /// | `Weibull` | `shape`, `scale` |
 /// | `Beta` | `alpha`, `beta`, optional `min`, `max` (default `[0, 1]`) |
 /// | `DiscreteUniform` | `a`, `b` (inclusive) |
@@ -548,6 +567,7 @@ pub(crate) mod wire {
             shape: f64,
             scale: Option<f64>,
             rate: Option<f64>,
+            mean: Option<f64>,
         },
         Weibull {
             shape: f64,
@@ -602,10 +622,16 @@ pub(crate) mod wire {
                     _ => Err(one_of("Exponential", "`rate` or `scale`")),
                 },
                 RealRepr::LogNormal { mu, sigma } => RealPrior::log_normal(mu, sigma),
-                RealRepr::Gamma { shape, scale, rate } => match (scale, rate) {
-                    (Some(scale), None) => RealPrior::gamma_shape_scale(shape, scale),
-                    (None, Some(rate)) => RealPrior::gamma_shape_rate(shape, rate),
-                    _ => Err(one_of("Gamma", "`scale` or `rate`")),
+                RealRepr::Gamma {
+                    shape,
+                    scale,
+                    rate,
+                    mean,
+                } => match (scale, rate, mean) {
+                    (Some(scale), None, None) => RealPrior::gamma_shape_scale(shape, scale),
+                    (None, Some(rate), None) => RealPrior::gamma_shape_rate(shape, rate),
+                    (None, None, Some(mean)) => RealPrior::gamma_mean_shape(mean, shape),
+                    _ => Err(one_of("Gamma", "`scale`, `rate`, or `mean`")),
                 },
                 RealRepr::Weibull { shape, scale } => RealPrior::weibull(shape, scale),
                 RealRepr::Beta {
@@ -780,6 +806,9 @@ mod tests {
         let by_rate = RealPrior::gamma_shape_rate(2.0, 0.25).unwrap();
         assert_eq!(by_scale.density(1.5), by_rate.density(1.5));
         assert_eq!(by_rate.to_string(), "Gamma(shape = 2, rate = 0.25)");
+        let by_mean = RealPrior::gamma_mean_shape(8.0, 2.0).unwrap();
+        assert_eq!(by_scale.density(1.5), by_mean.density(1.5));
+        assert_eq!(by_mean.to_string(), "Gamma(mean = 8, shape = 2)");
 
         // mean 6, k 3: r = 3, p = 1/3
         let by_p = IntPrior::negative_binomial_r_p(3.0, 1.0 / 3.0).unwrap();
@@ -803,6 +832,11 @@ mod tests {
 
         let mut rng = StdRng::seed_from_u64(4);
         let gamma = RealPrior::gamma_shape_rate(3.0, 2.0).unwrap();
+        let m = mean(Box::new(|| gamma.sample(&mut rng)));
+        assert!((m - 1.5).abs() < 0.03, "gamma mean {m}");
+
+        let mut rng = StdRng::seed_from_u64(6);
+        let gamma = RealPrior::gamma_mean_shape(1.5, 3.0).unwrap();
         let m = mean(Box::new(|| gamma.sample(&mut rng)));
         assert!((m - 1.5).abs() < 0.03, "gamma mean {m}");
 
@@ -851,6 +885,10 @@ mod tests {
             RealPrior::gamma_shape_rate(2.0, 3.0),
         );
         same(
+            gamma_prior!(mean = 6.0, shape = 2.0),
+            RealPrior::gamma_mean_shape(6.0, 2.0),
+        );
+        same(
             weibull_prior!(shape = 2.0, scale = 3.0),
             RealPrior::weibull(2.0, 3.0),
         );
@@ -889,12 +927,15 @@ mod tests {
             assert!(RealPrior::exponential_scale(bad).is_err());
             assert!(RealPrior::gamma_shape_scale(2.0, bad).is_err());
             assert!(RealPrior::gamma_shape_rate(2.0, bad).is_err());
+            assert!(RealPrior::gamma_mean_shape(bad, 2.0).is_err());
+            assert!(RealPrior::gamma_mean_shape(2.0, bad).is_err());
             assert!(IntPrior::negative_binomial_mean_dispersion(bad, 1.0).is_err());
             assert!(IntPrior::negative_binomial_mean_dispersion(1.0, bad).is_err());
         }
         assert!(RealPrior::exponential_scale(1e-320).is_err());
         assert!(RealPrior::gamma_shape_scale(2.0, 1e-320).is_err());
         assert!(RealPrior::gamma_shape_rate(2.0, 1e-320).is_err());
+        assert!(RealPrior::gamma_mean_shape(1e300, 1e-300).is_err());
         // p rounds to 1
         assert!(IntPrior::negative_binomial_mean_dispersion(1e-300, 1.0).is_err());
         assert!(RealPrior::uniform(1.0, 1.0).is_err());
@@ -980,6 +1021,7 @@ mod tests {
                 RealPrior::log_normal(0.0, 1.0).unwrap(),
                 RealPrior::gamma_shape_scale(2.0, 3.0).unwrap(),
                 RealPrior::gamma_shape_rate(2.0, 0.3).unwrap(),
+                RealPrior::gamma_mean_shape(0.7, 0.3).unwrap(),
                 RealPrior::weibull(2.0, 3.0).unwrap(),
                 RealPrior::scaled_beta(2.0, 5.0, 1.0, 3.0).unwrap(),
             ];
@@ -1040,6 +1082,13 @@ mod tests {
                 )
                 .is_err()
             );
+            assert!(
+                serde_json::from_str::<RealPrior>(
+                    r#"{"type":"Gamma","shape":2.0,"scale":1.0,"mean":2.0}"#
+                )
+                .is_err()
+            );
+            assert!(serde_json::from_str::<RealPrior>(r#"{"type":"Gamma","shape":2.0}"#).is_err());
             for doc in [
                 r#"{"type":"NegativeBinomial","r":3.0,"k":0.4}"#,
                 r#"{"type":"NegativeBinomial","mean":3.0}"#,
