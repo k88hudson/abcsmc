@@ -660,19 +660,20 @@ function solid(color: string): string {
 }
 
 // The charts' legend is plain svg, so clicks are matched to its labels by
-// position: the label text plus the swatch to its left.
+// position: the label text plus the swatch to its left. The listeners sit on
+// each chart's own wrapper, which is what moves to the document body when a
+// chart is expanded, so the legend works there too.
 const trajectoryChart = ref<HTMLElement | null>(null);
 
-function legendLabels(): SVGTextElement[] {
+function legendLabels(root: ParentNode): SVGTextElement[] {
   const labels = new Set(trajectoryLegend.value.map((item) => item.label));
-  return [
-    ...(trajectoryChart.value?.querySelectorAll<SVGTextElement>("svg text") ??
-      []),
-  ].filter((text) => labels.has(text.textContent?.trim() ?? ""));
+  return [...root.querySelectorAll<SVGTextElement>("svg text")].filter((text) =>
+    labels.has(text.textContent?.trim() ?? ""),
+  );
 }
 
 function legendItemAt(event: MouseEvent) {
-  for (const text of legendLabels()) {
+  for (const text of legendLabels(event.currentTarget as HTMLElement)) {
     const box = text.getBoundingClientRect();
     if (
       event.clientX >= box.left - 22 &&
@@ -693,8 +694,9 @@ function onLegendClick(event: MouseEvent) {
 }
 
 function onLegendHover(event: MouseEvent) {
-  if (trajectoryChart.value)
-    trajectoryChart.value.style.cursor = legendItemAt(event) ? "pointer" : "";
+  (event.currentTarget as HTMLElement).style.cursor = legendItemAt(event)
+    ? "pointer"
+    : "";
 }
 
 // Strike through the labels of hidden items. Set on the elements so exported
@@ -702,13 +704,14 @@ function onLegendHover(event: MouseEvent) {
 watch(
   [trajectoryCharts, trajectoryChart],
   () => {
-    for (const text of legendLabels()) {
-      const label = text.textContent!.trim();
-      const item = trajectoryLegend.value.find((i) => i.label === label);
-      const off = item ? !item.shown.value : false;
-      text.style.textDecoration = off ? "line-through" : "";
-      text.style.opacity = off ? "0.55" : "";
-    }
+    for (const chart of document.querySelectorAll("[data-trajectory-chart]"))
+      for (const text of legendLabels(chart)) {
+        const label = text.textContent!.trim();
+        const item = trajectoryLegend.value.find((i) => i.label === label);
+        const off = item ? !item.shown.value : false;
+        text.style.textDecoration = off ? "line-through" : "";
+        text.style.opacity = off ? "0.55" : "";
+      }
   },
   { flush: "post" },
 );
@@ -1325,8 +1328,6 @@ function fmt(x: number, digits = 3): string {
           <div
             ref="trajectoryChart"
             :class="{ grid: trajectoryCharts.length > 1 }"
-            @click="onLegendClick"
-            @mousemove="onLegendHover"
           >
             <div
               v-for="chart in trajectoryCharts"
@@ -1344,6 +1345,9 @@ function fmt(x: number, digits = 3): string {
                 :data-export-name="chart.filename"
                 :title="chart.title"
                 :csv="chart.csv"
+                data-trajectory-chart
+                @click="onLegendClick"
+                @mousemove="onLegendHover"
               />
             </div>
           </div>

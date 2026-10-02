@@ -164,6 +164,38 @@ test.describe("without file handles", () => {
     expect(await texts()).toEqual(before);
   });
 
+  test("legend items work in an expanded trajectories chart", async ({
+    page,
+  }) => {
+    await page.goto("/");
+    await page.getByLabel("Load run.jsonl").setInputFiles(fixture);
+    await expect(page.getByTestId("status")).toHaveText("Finished");
+
+    const section = page.getByTestId("trajectories");
+    await section.getByLabel("Chart options").click();
+    await page.getByRole("menuitem", { name: "Fullscreen" }).click();
+
+    // The expanded chart is moved out of the section, to the body.
+    const expanded = page.locator(".line-chart-wrapper.is-fullscreen");
+    await expect(expanded).toBeVisible();
+    await expect(section.locator(".line-chart-wrapper")).toHaveCount(0);
+    const lines = expanded.locator("svg path[stroke]");
+    const all = await lines.count();
+    const rejected = expanded
+      .locator("svg text")
+      .getByText("Rejected", { exact: true });
+
+    await rejected.click();
+    await expect(lines).toHaveCount(all - 20);
+    await expect(rejected).toHaveCSS("text-decoration-line", "line-through");
+
+    await expanded.getByLabel("Collapse").click();
+    await expect(expanded).toHaveCount(0);
+    await expect(
+      section.locator("svg text").getByText("Rejected", { exact: true }),
+    ).toHaveCSS("text-decoration-line", "line-through");
+  });
+
   test("the generation selector shows one generation or all of them", async ({
     page,
   }) => {
