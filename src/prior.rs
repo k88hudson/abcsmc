@@ -165,7 +165,7 @@ mod tests {
     #[test]
     fn priors_round_trip_through_json() {
         let priors = Priors::new()
-            .push(RealPrior::exponential(1.0).unwrap())
+            .push(RealPrior::exponential_rate(1.0).unwrap())
             .push(IntPrior::discrete_uniform(1, 4).unwrap());
         let json = serde_json::to_string(&priors).unwrap();
         assert_eq!(

@@ -2,9 +2,14 @@
 //!
 //! Sampling is delegated to `rand_distr` and densities to `statrs`; each
 //! variant carries one object from each crate, built from a single set of
-//! parameters so the two cannot disagree. Parameterizations follow the common
-//! textbook forms (rate for the exponential, shape and scale for gamma and
-//! Weibull), converted where a backing crate uses a different one.
+//! parameters so the two cannot disagree, converted where a backing crate
+//! uses a different parameterization.
+//!
+//! Where a family has more than one common parameterization, each has its own
+//! constructor named for its parameters and there is no unqualified one: the
+//! exponential by rate or scale, the gamma by shape and scale or shape and
+//! rate, and the negative binomial by `r` and `p` or mean and dispersion. A
+//! prior prints and serializes with the parameters it was given.
 
 use std::fmt;
 
@@ -159,13 +164,26 @@ impl RealPrior {
     }
 
     /// Exponential with the given rate (mean `1 / rate`).
-    pub fn exponential(rate: f64) -> Result<Self, PriorError> {
+    pub fn exponential_rate(rate: f64) -> Result<Self, PriorError> {
+        Self::exponential_declared(rate, [("rate", rate.into())])
+    }
+
+    /// Exponential with the given scale, which is its mean (rate `1 / scale`).
+    pub fn exponential_scale(scale: f64) -> Result<Self, PriorError> {
+        let rate = reciprocal("Exponential", "scale", scale)?;
+        Self::exponential_declared(rate, [("scale", scale.into())])
+    }
+
+    fn exponential_declared(
+        rate: f64,
+        declared: [(&'static str, Value); 1],
+    ) -> Result<Self, PriorError> {
         let sampler = rand_distr::Exp::new(rate).map_err(|e| PriorError::new("Exponential", e))?;
         let density =
             statrs::distribution::Exp::new(rate).map_err(|e| PriorError::new("Exponential", e))?;
         Ok(RealPrior(
             Real::Exponential(sampler, density),
-            Declared::new("Exponential", [("rate", rate.into())]),
+            Declared::new("Exponential", declared),
         ))
     }
 
@@ -182,15 +200,42 @@ impl RealPrior {
     }
 
     /// Gamma with the given shape and scale (mean `shape * scale`).
-    pub fn gamma(shape: f64, scale: f64) -> Result<Self, PriorError> {
+    pub fn gamma_shape_scale(shape: f64, scale: f64) -> Result<Self, PriorError> {
+        let rate = reciprocal("Gamma", "scale", scale)?;
+        Self::gamma_declared(
+            shape,
+            scale,
+            rate,
+            [("shape", shape.into()), ("scale", scale.into())],
+        )
+    }
+
+    /// Gamma with the given shape and rate (mean `shape / rate`).
+    pub fn gamma_shape_rate(shape: f64, rate: f64) -> Result<Self, PriorError> {
+        let scale = reciprocal("Gamma", "rate", rate)?;
+        Self::gamma_declared(
+            shape,
+            scale,
+            rate,
+            [("shape", shape.into()), ("rate", rate.into())],
+        )
+    }
+
+    /// The sampler takes the scale and the density the rate, so each
+    /// constructor passes the one it was given unconverted.
+    fn gamma_declared(
+        shape: f64,
+        scale: f64,
+        rate: f64,
+        declared: [(&'static str, Value); 2],
+    ) -> Result<Self, PriorError> {
         let sampler =
             rand_distr::Gamma::new(shape, scale).map_err(|e| PriorError::new("Gamma", e))?;
-        // statrs parameterizes by rate.
-        let density = statrs::distribution::Gamma::new(shape, 1.0 / scale)
+        let density = statrs::distribution::Gamma::new(shape, rate)
             .map_err(|e| PriorError::new("Gamma", e))?;
         Ok(RealPrior(
             Real::Gamma(sampler, density),
-            Declared::new("Gamma", [("shape", shape.into()), ("scale", scale.into())]),
+            Declared::new("Gamma", declared),
         ))
     }
 
@@ -325,20 +370,46 @@ impl IntPrior {
     /// Negative binomial counting failures before `r` successes of probability
     /// `p`, so `P(0) = p^r` and the mean is `r (1 - p) / p`. `p` must lie in
     /// `(0, 1)`: `p = 1` is a point mass at zero, which cannot be sampled.
-    pub fn negative_binomial(r: f64, p: f64) -> Result<Self, PriorError> {
+    pub fn negative_binomial_r_p(r: f64, p: f64) -> Result<Self, PriorError> {
         if !(p > 0.0 && p < 1.0) {
             return Err(PriorError::new(
                 "NegativeBinomial",
                 format!("p must be in (0, 1), got {p}"),
             ));
         }
-        let sampler = rand_distr::Gamma::new(r, (1.0 - p) / p)
+        Self::negative_binomial_declared(r, p, (1.0 - p) / p, [("r", r.into()), ("p", p.into())])
+    }
+
+    /// Negative binomial with the given mean and dispersion `k`, so the
+    /// variance is `mean + mean^2 / k`: smaller `k` is more dispersed, and it
+    /// approaches the Poisson as `k` grows. Equivalent to `r = k`,
+    /// `p = k / (k + mean)`.
+    pub fn negative_binomial_mean_dispersion(mean: f64, k: f64) -> Result<Self, PriorError> {
+        positive("NegativeBinomial", "mean", mean)?;
+        positive("NegativeBinomial", "k", k)?;
+        let p = k / (k + mean);
+        if !(p > 0.0 && p < 1.0) {
+            return Err(PriorError::new(
+                "NegativeBinomial",
+                format!("mean {mean} and k {k} give p = {p}, which must be in (0, 1)"),
+            ));
+        }
+        Self::negative_binomial_declared(k, p, mean / k, [("mean", mean.into()), ("k", k.into())])
+    }
+
+    fn negative_binomial_declared(
+        r: f64,
+        p: f64,
+        gamma_scale: f64,
+        declared: [(&'static str, Value); 2],
+    ) -> Result<Self, PriorError> {
+        let sampler = rand_distr::Gamma::new(r, gamma_scale)
             .map_err(|e| PriorError::new("NegativeBinomial", e))?;
         let density = statrs::distribution::NegativeBinomial::new(r, p)
             .map_err(|e| PriorError::new("NegativeBinomial", e))?;
         Ok(IntPrior(
             Int::NegativeBinomial(sampler, density),
-            Declared::new("NegativeBinomial", [("r", r.into()), ("p", p.into())]),
+            Declared::new("NegativeBinomial", declared),
         ))
     }
 
@@ -370,15 +441,42 @@ impl IntPrior {
     }
 }
 
+/// `1 / value` for a parameter given in the other parameterization, which
+/// must be positive and small or large enough that the reciprocal is too.
+fn reciprocal(family: &'static str, name: &str, value: f64) -> Result<f64, PriorError> {
+    positive(family, name, value)?;
+    let inverse = 1.0 / value;
+    if inverse.is_finite() && inverse > 0.0 {
+        Ok(inverse)
+    } else {
+        Err(PriorError::new(
+            family,
+            format!("{name} {value} is out of range: its reciprocal is {inverse}"),
+        ))
+    }
+}
+
 fn non_negative(k: i64) -> Option<u64> {
     u64::try_from(k).ok()
 }
 
+fn positive(family: &'static str, name: &str, value: f64) -> Result<(), PriorError> {
+    if value.is_finite() && value > 0.0 {
+        Ok(())
+    } else {
+        Err(PriorError::new(
+            family,
+            format!("{name} must be finite and positive, got {value}"),
+        ))
+    }
+}
+
 /// With the `serde` feature, priors serialize to and deserialize from a
 /// type-tagged document such as `{ "type": "Uniform", "a": 1.0, "b": 3.5 }`,
-/// so a config file can declare them without any code-level wrapper. A prior
-/// is written with the parameterization its constructor takes (`rate` for
-/// the exponential, `scale` for gamma, `min` and `max` always for beta).
+/// so a config file can declare them without any code-level wrapper. Where a
+/// family has two parameterizations a document gives exactly one of them, and
+/// a prior is written with the one it was declared with, so a round trip is
+/// exact (`min` and `max` are always written for beta).
 /// Field names per family:
 ///
 /// | `type` | fields |
@@ -393,7 +491,7 @@ fn non_negative(k: i64) -> Option<u64> {
 /// | `DiscreteUniform` | `a`, `b` (inclusive) |
 /// | `Poisson` | `lambda` |
 /// | `Binomial` | `n`, `p` |
-/// | `NegativeBinomial` | `r`, `p` |
+/// | `NegativeBinomial` | `r`, `p` or `mean`, `k` |
 #[cfg(feature = "serde")]
 pub(crate) mod wire {
     use serde::ser::SerializeMap;
@@ -468,26 +566,27 @@ pub(crate) mod wire {
     #[derive(serde::Deserialize)]
     #[serde(tag = "type")]
     pub(crate) enum IntRepr {
-        DiscreteUniform { a: i64, b: i64 },
-        Poisson { lambda: f64 },
-        Binomial { n: u64, p: f64 },
-        NegativeBinomial { r: f64, p: f64 },
+        DiscreteUniform {
+            a: i64,
+            b: i64,
+        },
+        Poisson {
+            lambda: f64,
+        },
+        Binomial {
+            n: u64,
+            p: f64,
+        },
+        NegativeBinomial {
+            r: Option<f64>,
+            p: Option<f64>,
+            mean: Option<f64>,
+            k: Option<f64>,
+        },
     }
 
-    /// Resolve a `scale`/`rate` pair to a scale, requiring exactly one.
-    fn scale_from(
-        family: &'static str,
-        scale: Option<f64>,
-        rate: Option<f64>,
-    ) -> Result<f64, PriorError> {
-        match (scale, rate) {
-            (Some(scale), None) => Ok(scale),
-            (None, Some(rate)) => Ok(1.0 / rate),
-            _ => Err(PriorError::new(
-                family,
-                "give exactly one of `scale` or `rate`",
-            )),
-        }
+    fn one_of(family: &'static str, forms: &str) -> PriorError {
+        PriorError::new(family, format!("give exactly one of {forms}"))
     }
 
     impl TryFrom<RealRepr> for RealPrior {
@@ -497,13 +596,17 @@ pub(crate) mod wire {
             match repr {
                 RealRepr::Uniform { a, b } => RealPrior::uniform(a, b),
                 RealRepr::Normal { mean, std_dev } => RealPrior::normal(mean, std_dev),
-                RealRepr::Exponential { rate, scale } => {
-                    RealPrior::exponential(1.0 / scale_from("Exponential", scale, rate)?)
-                }
+                RealRepr::Exponential { rate, scale } => match (rate, scale) {
+                    (Some(rate), None) => RealPrior::exponential_rate(rate),
+                    (None, Some(scale)) => RealPrior::exponential_scale(scale),
+                    _ => Err(one_of("Exponential", "`rate` or `scale`")),
+                },
                 RealRepr::LogNormal { mu, sigma } => RealPrior::log_normal(mu, sigma),
-                RealRepr::Gamma { shape, scale, rate } => {
-                    RealPrior::gamma(shape, scale_from("Gamma", scale, rate)?)
-                }
+                RealRepr::Gamma { shape, scale, rate } => match (scale, rate) {
+                    (Some(scale), None) => RealPrior::gamma_shape_scale(shape, scale),
+                    (None, Some(rate)) => RealPrior::gamma_shape_rate(shape, rate),
+                    _ => Err(one_of("Gamma", "`scale` or `rate`")),
+                },
                 RealRepr::Weibull { shape, scale } => RealPrior::weibull(shape, scale),
                 RealRepr::Beta {
                     alpha,
@@ -523,7 +626,13 @@ pub(crate) mod wire {
                 IntRepr::DiscreteUniform { a, b } => IntPrior::discrete_uniform(a, b),
                 IntRepr::Poisson { lambda } => IntPrior::poisson(lambda),
                 IntRepr::Binomial { n, p } => IntPrior::binomial(n, p),
-                IntRepr::NegativeBinomial { r, p } => IntPrior::negative_binomial(r, p),
+                IntRepr::NegativeBinomial { r, p, mean, k } => match (r, p, mean, k) {
+                    (Some(r), Some(p), None, None) => IntPrior::negative_binomial_r_p(r, p),
+                    (None, None, Some(mean), Some(k)) => {
+                        IntPrior::negative_binomial_mean_dispersion(mean, k)
+                    }
+                    _ => Err(one_of("NegativeBinomial", "`r`, `p` or `mean`, `k`")),
+                },
             }
         }
     }
@@ -569,11 +678,11 @@ mod tests {
             1.0 / (2.0 * (2.0 * std::f64::consts::PI).sqrt())
         ));
 
-        let exp = RealPrior::exponential(2.0).unwrap();
+        let exp = RealPrior::exponential_rate(2.0).unwrap();
         assert!(close(exp.density(0.5), 2.0 * (-1.0f64).exp()));
         assert_eq!(exp.density(-0.5), 0.0);
 
-        let gamma = RealPrior::gamma(2.0, 3.0).unwrap();
+        let gamma = RealPrior::gamma_shape_scale(2.0, 3.0).unwrap();
         // shape 2: pdf = x e^{-x/scale} / scale^2
         assert!(close(gamma.density(1.5), 1.5 * (-0.5f64).exp() / 9.0));
 
@@ -623,7 +732,7 @@ mod tests {
         assert_eq!(binomial.density(5), 0.0);
 
         // P(0) = p^r
-        let nb = IntPrior::negative_binomial(3.0, 0.4).unwrap();
+        let nb = IntPrior::negative_binomial_r_p(3.0, 0.4).unwrap();
         assert!(close(nb.density(0), 0.4f64.powi(3)));
         assert!(close(nb.density(1), 3.0 * 0.4f64.powi(3) * 0.6));
     }
@@ -634,7 +743,7 @@ mod tests {
         let uniform = RealPrior::uniform(2.0, 3.0).unwrap();
         let du = IntPrior::discrete_uniform(-2, 2).unwrap();
         let beta = RealPrior::scaled_beta(2.0, 5.0, 1.0, 3.0).unwrap();
-        let nb = IntPrior::negative_binomial(2.0, 0.3).unwrap();
+        let nb = IntPrior::negative_binomial_r_p(2.0, 0.3).unwrap();
         let mut seen = std::collections::HashSet::new();
         for _ in 0..2000 {
             let x = uniform.sample(&mut rng);
@@ -653,7 +762,7 @@ mod tests {
     fn negative_binomial_sample_mean_matches() {
         let mut rng = StdRng::seed_from_u64(11);
         let (r, p) = (4.0, 0.25);
-        let nb = IntPrior::negative_binomial(r, p).unwrap();
+        let nb = IntPrior::negative_binomial_r_p(r, p).unwrap();
         let n = 20_000;
         let mean = (0..n).map(|_| nb.sample(&mut rng) as f64).sum::<f64>() / n as f64;
         let expected = r * (1.0 - p) / p;
@@ -661,12 +770,138 @@ mod tests {
     }
 
     #[test]
+    fn alternative_parameterizations_agree() {
+        let by_rate = RealPrior::exponential_rate(4.0).unwrap();
+        let by_scale = RealPrior::exponential_scale(0.25).unwrap();
+        assert_eq!(by_rate.density(0.3), by_scale.density(0.3));
+        assert_eq!(by_scale.to_string(), "Exponential(scale = 0.25)");
+
+        let by_scale = RealPrior::gamma_shape_scale(2.0, 4.0).unwrap();
+        let by_rate = RealPrior::gamma_shape_rate(2.0, 0.25).unwrap();
+        assert_eq!(by_scale.density(1.5), by_rate.density(1.5));
+        assert_eq!(by_rate.to_string(), "Gamma(shape = 2, rate = 0.25)");
+
+        // mean 6, k 3: r = 3, p = 1/3
+        let by_p = IntPrior::negative_binomial_r_p(3.0, 1.0 / 3.0).unwrap();
+        let by_mean = IntPrior::negative_binomial_mean_dispersion(6.0, 3.0).unwrap();
+        for k in 0..20 {
+            assert!(close(by_p.density(k), by_mean.density(k)));
+        }
+        assert_eq!(by_mean.to_string(), "NegativeBinomial(mean = 6, k = 3)");
+    }
+
+    #[test]
+    fn alternative_parameterizations_sample_the_same_distribution() {
+        let n = 40_000;
+        let mean =
+            |mut draw: Box<dyn FnMut() -> f64>| (0..n).map(|_| draw()).sum::<f64>() / n as f64;
+
+        let mut rng = StdRng::seed_from_u64(3);
+        let exp = RealPrior::exponential_scale(2.5).unwrap();
+        let m = mean(Box::new(|| exp.sample(&mut rng)));
+        assert!((m - 2.5).abs() < 0.05, "exponential mean {m}");
+
+        let mut rng = StdRng::seed_from_u64(4);
+        let gamma = RealPrior::gamma_shape_rate(3.0, 2.0).unwrap();
+        let m = mean(Box::new(|| gamma.sample(&mut rng)));
+        assert!((m - 1.5).abs() < 0.03, "gamma mean {m}");
+
+        let mut rng = StdRng::seed_from_u64(5);
+        let nb = IntPrior::negative_binomial_mean_dispersion(6.0, 3.0).unwrap();
+        let draws: Vec<f64> = (0..n).map(|_| nb.sample(&mut rng) as f64).collect();
+        let m = draws.iter().sum::<f64>() / n as f64;
+        let var = draws.iter().map(|x| (x - m).powi(2)).sum::<f64>() / n as f64;
+        assert!((m - 6.0).abs() < 0.1, "negative binomial mean {m}");
+        // mean + mean^2 / k
+        assert!((var - 18.0).abs() < 1.0, "negative binomial variance {var}");
+    }
+
+    #[test]
+    fn macros_expand_to_the_named_constructors() {
+        use crate::*;
+        let same = |a: Result<RealPrior, PriorError>, b: Result<RealPrior, PriorError>| {
+            assert_eq!(a.unwrap().declared(), b.unwrap().declared());
+        };
+        same(
+            uniform_prior!(a = 0.5, b = 3.0),
+            RealPrior::uniform(0.5, 3.0),
+        );
+        same(
+            normal_prior!(mean = 1.0, std_dev = 2.0),
+            RealPrior::normal(1.0, 2.0),
+        );
+        same(
+            exponential_prior!(rate = 2.0),
+            RealPrior::exponential_rate(2.0),
+        );
+        same(
+            exponential_prior!(scale = 2.0),
+            RealPrior::exponential_scale(2.0),
+        );
+        same(
+            log_normal_prior!(mu = 0.0, sigma = 1.0),
+            RealPrior::log_normal(0.0, 1.0),
+        );
+        same(
+            gamma_prior!(shape = 2.0, scale = 3.0),
+            RealPrior::gamma_shape_scale(2.0, 3.0),
+        );
+        same(
+            gamma_prior!(shape = 2.0, rate = 3.0,),
+            RealPrior::gamma_shape_rate(2.0, 3.0),
+        );
+        same(
+            weibull_prior!(shape = 2.0, scale = 3.0),
+            RealPrior::weibull(2.0, 3.0),
+        );
+        same(
+            beta_prior!(alpha = 2.0, beta = 5.0),
+            RealPrior::beta(2.0, 5.0),
+        );
+        same(
+            beta_prior!(alpha = 2.0, beta = 5.0, min = 1.0, max = 3.0),
+            RealPrior::scaled_beta(2.0, 5.0, 1.0, 3.0),
+        );
+
+        let same = |a: Result<IntPrior, PriorError>, b: Result<IntPrior, PriorError>| {
+            assert_eq!(a.unwrap().declared(), b.unwrap().declared());
+        };
+        same(
+            discrete_uniform_prior!(a = 1, b = 4),
+            IntPrior::discrete_uniform(1, 4),
+        );
+        same(poisson_prior!(lambda = 3.0), IntPrior::poisson(3.0));
+        same(binomial_prior!(n = 4, p = 0.5), IntPrior::binomial(4, 0.5));
+        same(
+            negative_binomial_prior!(r = 3.0, p = 0.4),
+            IntPrior::negative_binomial_r_p(3.0, 0.4),
+        );
+        same(
+            negative_binomial_prior!(mean = 6.0, k = 3.0),
+            IntPrior::negative_binomial_mean_dispersion(6.0, 3.0),
+        );
+        assert!(exponential_prior!(rate = 0.0).is_err());
+    }
+
+    #[test]
     fn invalid_parameters_are_rejected() {
+        for bad in [0.0, -1.0, f64::INFINITY, f64::NAN] {
+            assert!(RealPrior::exponential_scale(bad).is_err());
+            assert!(RealPrior::gamma_shape_scale(2.0, bad).is_err());
+            assert!(RealPrior::gamma_shape_rate(2.0, bad).is_err());
+            assert!(IntPrior::negative_binomial_mean_dispersion(bad, 1.0).is_err());
+            assert!(IntPrior::negative_binomial_mean_dispersion(1.0, bad).is_err());
+        }
+        assert!(RealPrior::exponential_scale(1e-320).is_err());
+        assert!(RealPrior::gamma_shape_scale(2.0, 1e-320).is_err());
+        assert!(RealPrior::gamma_shape_rate(2.0, 1e-320).is_err());
+        // p rounds to 1
+        assert!(IntPrior::negative_binomial_mean_dispersion(1e-300, 1.0).is_err());
         assert!(RealPrior::uniform(1.0, 1.0).is_err());
         assert!(RealPrior::normal(0.0, -1.0).is_err());
-        assert!(RealPrior::exponential(0.0).is_err());
+        assert!(RealPrior::exponential_rate(0.0).is_err());
         assert!(IntPrior::discrete_uniform(3, 2).is_err());
-        assert!(IntPrior::negative_binomial(2.0, 1.0).is_err());
+        assert!(IntPrior::negative_binomial_r_p(2.0, 1.0).is_err());
         assert!(RealPrior::scaled_beta(2.0, 2.0, 3.0, 1.0).is_err());
         let err = RealPrior::uniform(1.0, 1.0).unwrap_err().to_string();
         assert!(err.starts_with("Uniform prior:"), "{err}");
@@ -740,9 +975,11 @@ mod tests {
             let priors = [
                 RealPrior::uniform(0.02, 2.2).unwrap(),
                 RealPrior::normal(1.0, 2.0).unwrap(),
-                RealPrior::exponential(2.0).unwrap(),
+                RealPrior::exponential_rate(2.0).unwrap(),
+                RealPrior::exponential_scale(0.3).unwrap(),
                 RealPrior::log_normal(0.0, 1.0).unwrap(),
-                RealPrior::gamma(2.0, 3.0).unwrap(),
+                RealPrior::gamma_shape_scale(2.0, 3.0).unwrap(),
+                RealPrior::gamma_shape_rate(2.0, 0.3).unwrap(),
                 RealPrior::weibull(2.0, 3.0).unwrap(),
                 RealPrior::scaled_beta(2.0, 5.0, 1.0, 3.0).unwrap(),
             ];
@@ -755,7 +992,8 @@ mod tests {
                 IntPrior::discrete_uniform(0, 215).unwrap(),
                 IntPrior::poisson(3.0).unwrap(),
                 IntPrior::binomial(4, 0.5).unwrap(),
-                IntPrior::negative_binomial(3.0, 0.4).unwrap(),
+                IntPrior::negative_binomial_r_p(3.0, 0.4).unwrap(),
+                IntPrior::negative_binomial_mean_dispersion(6.0, 0.3).unwrap(),
             ];
             for prior in priors {
                 let json = serde_json::to_string(&prior).unwrap();
@@ -769,6 +1007,17 @@ mod tests {
             assert_eq!(
                 serde_json::to_string(&IntPrior::discrete_uniform(1, 4).unwrap()).unwrap(),
                 r#"{"type":"DiscreteUniform","a":1,"b":4}"#
+            );
+            assert_eq!(
+                serde_json::to_string(&RealPrior::gamma_shape_rate(2.0, 0.3).unwrap()).unwrap(),
+                r#"{"type":"Gamma","shape":2.0,"rate":0.3}"#
+            );
+            assert_eq!(
+                serde_json::to_string(
+                    &IntPrior::negative_binomial_mean_dispersion(6.0, 0.3).unwrap()
+                )
+                .unwrap(),
+                r#"{"type":"NegativeBinomial","mean":6.0,"k":0.3}"#
             );
         }
 
@@ -785,6 +1034,19 @@ mod tests {
                 serde_json::from_str::<RealPrior>(r#"{"type":"Uniform","a":5.0,"b":1.0}"#).is_err()
             );
             assert!(serde_json::from_str::<RealPrior>(r#"{"type":"Cauchy","x0":0.0}"#).is_err());
+            assert!(
+                serde_json::from_str::<RealPrior>(
+                    r#"{"type":"Gamma","shape":2.0,"scale":1.0,"rate":1.0}"#
+                )
+                .is_err()
+            );
+            for doc in [
+                r#"{"type":"NegativeBinomial","r":3.0,"k":0.4}"#,
+                r#"{"type":"NegativeBinomial","mean":3.0}"#,
+                r#"{"type":"NegativeBinomial","r":3.0,"p":0.4,"mean":4.5,"k":3.0}"#,
+            ] {
+                assert!(serde_json::from_str::<IntPrior>(doc).is_err(), "{doc}");
+            }
             assert!(
                 serde_json::from_str::<IntPrior>(r#"{"type":"Uniform","a":0.0,"b":1.0}"#).is_err()
             );

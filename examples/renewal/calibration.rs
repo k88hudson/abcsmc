@@ -6,8 +6,8 @@
 use std::path::Path;
 
 use abcsmc::{
-    CalibrationModel, Distance, Generation, IntPrior, JsonlObserver, Particle, Priors, RealPrior,
-    StdoutObserver, define_priors, distance, run_quantiles_with,
+    CalibrationModel, Distance, Generation, JsonlObserver, Particle, Priors, StdoutObserver,
+    define_priors, discrete_uniform_prior, distance, exponential_prior, run_quantiles_with,
 };
 use rand::{SeedableRng, rngs::StdRng};
 use serde::Serialize;
@@ -44,8 +44,8 @@ impl CalibrationModel for RenewalFit {
 
     fn priors(&self) -> Priors {
         RenewalPriors {
-            r0: RealPrior::exponential(1.0).unwrap(),
-            initial_infections: IntPrior::discrete_uniform(1, 4).unwrap(),
+            r0: exponential_prior!(rate = 1.0).unwrap(),
+            initial_infections: discrete_uniform_prior!(a = 1, b = 4).unwrap(),
         }
         .into()
     }
