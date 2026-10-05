@@ -1,4 +1,6 @@
-use crate::{CalibrationModel, Distance, Draw, Params, Particle, PerturbationKernel, Priors};
+use crate::{
+    CalibrationModel, Distance, Draw, Params, Particle, PerturbationKernel, Population, Priors,
+};
 use core::f64;
 use rand::{Rng, SeedableRng, rngs::StdRng};
 use rand_distr::{Distribution, weighted::WeightedIndex};
@@ -111,11 +113,48 @@ where
     M: CalibrationModel + Sync,
     M::Output: Send + Sync,
 {
+    let previous = Population {
+        params: previous_particles
+            .iter()
+            .map(|p| p.params.clone())
+            .collect(),
+        weights: previous_particles.iter().map(|p| p.weight).collect(),
+    };
+    step_from(
+        model,
+        distance,
+        error_threshold,
+        n_particles,
+        &previous,
+        kernel,
+        rng,
+        on_accept,
+        on_reject,
+    )
+}
+
+/// [`step`] from the previous generation's parameters and weights alone, which
+/// is all a generation needs of the one before it.
+#[allow(clippy::too_many_arguments)]
+pub fn step_from<M>(
+    model: &M,
+    distance: &(impl Distance<M::Output> + ?Sized),
+    error_threshold: f64,
+    n_particles: usize,
+    previous: &Population,
+    kernel: &dyn PerturbationKernel,
+    rng: &mut impl Rng,
+    on_accept: impl Fn(&Params, f64, u64) + Sync,
+    on_reject: impl Fn(&Params, &M::Output, f64) + Sync,
+) -> StepOutput<M>
+where
+    M: CalibrationModel + Sync,
+    M::Output: Send + Sync,
+{
     let priors = model.priors();
     check_arity::<M>(&priors);
     let max_attempts = model.max_attempts_per_proposal();
-    let weights: Vec<f64> = previous_particles.iter().map(|x| x.weight).collect();
-    let particle_sampler = WeightedIndex::new(weights).unwrap();
+    let particle_sampler = WeightedIndex::new(&previous.weights).unwrap();
 
     let seeds: Vec<u64> = (0..n_particles).map(|_| rng.next_u64()).collect();
 
@@ -125,7 +164,7 @@ where
             let mut rng = StdRng::seed_from_u64(seed);
             for n_attempts in 1..=max_attempts {
                 let Some((proposed, proposed_prior_density)) = (0..max_attempts).find_map(|_| {
-                    let base = &previous_particles[particle_sampler.sample(&mut rng)].params;
+                    let base = &previous.params[particle_sampler.sample(&mut rng)];
                     let proposed = kernel.perturb(base, &mut rng);
                     let density = priors.density(&proposed);
                     (density > 0.0).then_some((proposed, density))
@@ -137,11 +176,12 @@ where
                 let output = model.simulate(&M::Draw::from_values(proposed.values()), sim_seed);
                 let distance = distance.distance(&output);
                 if distance <= error_threshold {
-                    let proposal_weight: f64 = previous_particles
+                    let proposal_weight: f64 = previous
+                        .weights
                         .iter()
-                        .map(|particle| {
-                            particle.weight
-                                * kernel.transition_probability(&proposed, &particle.params)
+                        .zip(&previous.params)
+                        .map(|(weight, params)| {
+                            weight * kernel.transition_probability(&proposed, params)
                         })
                         .sum();
                     let weight = if proposal_weight > 0.0 {

@@ -1,5 +1,3 @@
-use rand::{SeedableRng, rngs::StdRng};
-
 pub mod diagnostics;
 pub mod distance;
 pub use distance::{Distance, DistanceFn, DistanceTo, distance_fn, distance_to};
@@ -26,6 +24,8 @@ pub use particle::*;
 mod observer;
 pub use observer::*;
 mod platform;
+mod sampler;
+pub use sampler::*;
 mod run_log;
 pub use run_log::*;
 
@@ -73,129 +73,20 @@ pub struct GenerationStats {
     pub duration_seconds: f64,
 }
 
-/// Run one generation: prior rejection when there is no previous population,
-/// otherwise one SMC step from it.
-#[allow(clippy::too_many_arguments)]
-fn run_generation<M>(
-    model: &M,
-    distance: &(impl Distance<M::Output> + ?Sized),
-    generation: usize,
-    tolerance: f64,
-    n_particles: usize,
-    previous: Option<(&[Particle<M>], &dyn PerturbationKernel)>,
-    rng: &mut StdRng,
-    observer: &impl RunObserver<M>,
-) -> Option<Generation<M>>
+/// Runs the generations of `schedule` that `sampler` has not completed yet,
+/// stopping early if one cannot be filled.
+fn run_schedule<M, D, O>(sampler: &mut Sampler<'_, M, D, O>, schedule: &[f64])
 where
     M: CalibrationModel + Sync,
     M::Output: Send + Sync,
+    D: Distance<M::Output> + ?Sized,
+    O: RunObserver<M>,
 {
-    observer.generation_started(generation, tolerance);
-    let started = platform::Instant::now();
-    let on_accept = |params: &Params, distance: f64, attempts: u64| {
-        observer.particle_accepted(generation, params, distance, attempts)
-    };
-    let on_reject = |params: &Params, output: &M::Output, distance: f64| {
-        observer.particle_rejected(model, generation, params, output, distance)
-    };
-    let output = match previous {
-        None => initialize(
-            model,
-            distance,
-            tolerance,
-            n_particles,
-            rng,
-            on_accept,
-            on_reject,
-        ),
-        Some((previous, kernel)) => step(
-            model,
-            distance,
-            tolerance,
-            n_particles,
-            previous,
-            kernel,
-            rng,
-            on_accept,
-            on_reject,
-        ),
-    };
-    if !output.complete {
-        observer.generation_abandoned(generation);
-        return None;
-    }
-    let stats = GenerationStats {
-        generation,
-        tolerance,
-        accepted: output.particles.len(),
-        attempts: output.n_attempts,
-        acceptance_ratio: output.particles.len() as f64 / output.n_attempts as f64,
-        ess: get_ess(&output),
-        perplexity: get_perplexity(&output),
-        duration_seconds: started.elapsed().as_secs_f64(),
-    };
-    let completed = Generation {
-        particles: output.particles,
-        stats,
-    };
-    observer.generation_completed(model, &completed);
-    Some(completed)
-}
-
-/// Continue an ABC-SMC run through `tolerances`, one generation per tolerance,
-/// starting from whatever generations have already been completed. The kernel
-/// is adapted to each completed population. Stops early if a generation cannot
-/// be filled.
-fn run_from<M>(
-    model: &M,
-    distance: &(impl Distance<M::Output> + ?Sized),
-    tolerances: &[f64],
-    n_particles: usize,
-    mut generations: Vec<Generation<M>>,
-    rng: &mut StdRng,
-    observer: &impl RunObserver<M>,
-) -> Vec<Generation<M>>
-where
-    M: CalibrationModel + Sync,
-    M::Output: Send + Sync,
-{
-    let mut kernel = model.perturbation_kernel();
-    let adapter = model.variance_adapter();
-    if let Some(last) = generations.last() {
-        adapter.adapt(&params_of(last), kernel.as_mut());
-    }
-    for &tolerance in tolerances {
-        let generation = generations.len();
-        let previous = generations
-            .last()
-            .map(|g| (g.particles.as_slice(), kernel.as_ref()));
-        match run_generation(
-            model,
-            distance,
-            generation,
-            tolerance,
-            n_particles,
-            previous,
-            rng,
-            observer,
-        ) {
-            Some(completed) => {
-                adapter.adapt(&params_of(&completed), kernel.as_mut());
-                generations.push(completed);
-            }
-            None => break,
+    for &tolerance in schedule.iter().skip(sampler.completed()) {
+        if sampler.next_generation(tolerance).is_none() {
+            break;
         }
     }
-    observer.run_finished(model, &generations);
-    generations
-}
-
-fn params_of<M: CalibrationModel>(generation: &Generation<M>) -> Vec<Params> {
-    generation
-        .particles
-        .iter()
-        .map(|p| p.params.clone())
-        .collect()
 }
 
 /// Run ABC-SMC with one generation per tolerance: generation 0 is rejection
@@ -239,25 +130,16 @@ where
     M: CalibrationModel + Sync,
     M::Output: Send + Sync,
 {
-    let mut rng = StdRng::seed_from_u64(model.rng_seed());
-    let meta = RunMeta::new(
+    let mut sampler = Sampler::start(
         model,
         distance,
+        n_particles,
         description,
-        n_particles,
         tolerances.len(),
-        None,
-    );
-    observer.run_started(model, &meta);
-    run_from(
-        model,
-        distance,
-        tolerances,
-        n_particles,
-        Vec::new(),
-        &mut rng,
         observer,
-    )
+    );
+    run_schedule(&mut sampler, tolerances);
+    sampler.finish()
 }
 
 /// Like [`run`], but with tolerances given as quantiles of the prior's distance
@@ -298,44 +180,232 @@ where
     M: CalibrationModel + Sync,
     M::Output: Send + Sync,
 {
-    let mut rng = StdRng::seed_from_u64(model.rng_seed());
-    let meta = RunMeta::new(
+    let mut sampler = Sampler::start_with_quantiles(
         model,
         distance,
-        description,
         n_particles,
+        description,
         quantiles.len() + 1,
         Some(quantiles),
-    );
-    observer.run_started(model, &meta);
-    let Some(prior) = run_generation(
-        model,
-        distance,
-        0,
-        f64::INFINITY,
-        n_particles,
-        None,
-        &mut rng,
         observer,
-    ) else {
-        observer.run_finished(model, &[]);
-        return Vec::new();
-    };
-    let mut distances: Vec<f64> = prior.particles.iter().map(|p| p.distance).collect();
+    );
+    if let Some(prior) = sampler.next_generation(f64::INFINITY) {
+        let schedule = quantile_schedule(prior.particles.iter().map(|p| p.distance), quantiles);
+        run_schedule(&mut sampler, &schedule);
+    }
+    sampler.finish()
+}
+
+/// The tolerance of every generation of a quantile run: infinite for
+/// generation 0, then each quantile of generation 0's `distances`.
+fn quantile_schedule(distances: impl Iterator<Item = f64>, quantiles: &[f64]) -> Vec<f64> {
+    let mut distances: Vec<f64> = distances.collect();
     distances.sort_by(|a, b| a.total_cmp(b));
-    let tolerances: Vec<f64> = quantiles
-        .iter()
-        .map(|&q| quantile_threshold(&distances, q))
-        .collect();
-    run_from(
+    std::iter::once(f64::INFINITY)
+        .chain(quantiles.iter().map(|&q| quantile_threshold(&distances, q)))
+        .collect()
+}
+
+#[cfg(feature = "serde")]
+fn invalid(message: String) -> std::io::Error {
+    std::io::Error::new(std::io::ErrorKind::InvalidInput, message)
+}
+
+/// Checks that `log` is a run of `model`, so its particles mean what the
+/// model's priors say they mean.
+#[cfg(feature = "serde")]
+fn check_same_model<M: CalibrationModel>(model: &M, log: &RunLog) -> std::io::Result<()> {
+    let priors = model.priors();
+    if priors.len() != log.params.len() {
+        return Err(invalid(format!(
+            "the model has {} parameters but the log has {}",
+            priors.len(),
+            log.params.len()
+        )));
+    }
+    let names = <M::Draw as Draw>::NAMES;
+    for (i, (prior, logged)) in priors.iter().zip(&log.params).enumerate() {
+        if names.get(i).is_some_and(|name| *name != logged.name) {
+            return Err(invalid(format!(
+                "parameter {i} is {} in the model but {} in the log",
+                names[i], logged.name
+            )));
+        }
+        let same_prior = logged
+            .prior
+            .as_ref()
+            .is_none_or(|p| p.to_string() == prior.to_string());
+        if priors.is_real(i) != logged.real || !same_prior {
+            return Err(invalid(format!(
+                "the prior of {} is {prior} in the model but not in the log",
+                logged.name
+            )));
+        }
+    }
+    Ok(())
+}
+
+/// A sampler placed after the last generation `log` completed, or at the
+/// start of a new run if it completed none.
+#[cfg(feature = "serde")]
+fn sampler_after<'a, M, D, O>(
+    model: &'a M,
+    distance: &'a D,
+    log: &RunLog,
+    description: &str,
+    n_generations: usize,
+    quantiles: Option<&[f64]>,
+    observer: &'a O,
+) -> std::io::Result<Sampler<'a, M, D, O>>
+where
+    M: CalibrationModel + Sync,
+    M::Output: Send + Sync,
+    D: Distance<M::Output> + ?Sized,
+    O: RunObserver<M>,
+{
+    check_same_model(model, log)?;
+    let Some(last) = log.generations.last() else {
+        return Ok(Sampler::start_with_quantiles(
+            model,
+            distance,
+            log.n_particles,
+            description,
+            n_generations,
+            quantiles,
+            observer,
+        ));
+    };
+    if last.particles.len() != log.n_particles {
+        return Err(invalid(format!(
+            "generation {} has {} particles but the run declared {}",
+            last.stats.generation,
+            last.particles.len(),
+            log.n_particles
+        )));
+    }
+    Ok(Sampler::resume_with_quantiles(
         model,
         distance,
-        &tolerances,
-        n_particles,
-        vec![prior],
-        &mut rng,
+        last.population(),
+        log.generations.len(),
+        description,
+        n_generations,
+        quantiles,
+        observer,
+    ))
+}
+
+/// Continues the [`run_with`] run recorded in `log` through `tolerances`, the
+/// run's whole schedule: generations the log completed are not run again, and
+/// a generation that was under way starts over. Returns the generations run
+/// now, which is none if the log already completed the schedule.
+///
+/// The result is the one the uninterrupted run would have given. Give
+/// `observer` a [`JsonlObserver::append`] on the same log to keep recording
+/// to it. A longer schedule than the run started with extends it.
+///
+/// Fails if the log is not a run of `model`, or completed a generation at a
+/// different tolerance than `tolerances` gives it.
+#[cfg(feature = "serde")]
+pub fn resume_with<M>(
+    model: &M,
+    distance: &(impl Distance<M::Output> + ?Sized),
+    tolerances: &[f64],
+    log: &RunLog,
+    description: &str,
+    observer: &impl RunObserver<M>,
+) -> std::io::Result<Vec<Generation<M>>>
+where
+    M: CalibrationModel + Sync,
+    M::Output: Send + Sync,
+{
+    resume_schedule(
+        model,
+        distance,
+        tolerances,
+        None,
+        log,
+        description,
         observer,
     )
+}
+
+/// Continues the [`run_quantiles_with`] run recorded in `log`, as
+/// [`resume_with`] does for a run with fixed tolerances. The tolerances come
+/// from the log's generation 0 if it completed one.
+#[cfg(feature = "serde")]
+pub fn resume_quantiles_with<M>(
+    model: &M,
+    distance: &(impl Distance<M::Output> + ?Sized),
+    quantiles: &[f64],
+    log: &RunLog,
+    description: &str,
+    observer: &impl RunObserver<M>,
+) -> std::io::Result<Vec<Generation<M>>>
+where
+    M: CalibrationModel + Sync,
+    M::Output: Send + Sync,
+{
+    let Some(prior) = log.generations.first() else {
+        check_same_model(model, log)?;
+        return Ok(run_quantiles_with(
+            model,
+            distance,
+            quantiles,
+            log.n_particles,
+            description,
+            observer,
+        ));
+    };
+    let schedule = quantile_schedule(prior.particles.iter().map(|p| p.distance), quantiles);
+    resume_schedule(
+        model,
+        distance,
+        &schedule,
+        Some(quantiles),
+        log,
+        description,
+        observer,
+    )
+}
+
+#[cfg(feature = "serde")]
+fn resume_schedule<M>(
+    model: &M,
+    distance: &(impl Distance<M::Output> + ?Sized),
+    schedule: &[f64],
+    quantiles: Option<&[f64]>,
+    log: &RunLog,
+    description: &str,
+    observer: &impl RunObserver<M>,
+) -> std::io::Result<Vec<Generation<M>>>
+where
+    M: CalibrationModel + Sync,
+    M::Output: Send + Sync,
+{
+    for (logged, &tolerance) in log.generations.iter().zip(schedule) {
+        if logged.stats.tolerance != tolerance {
+            return Err(invalid(format!(
+                "generation {} ran at tolerance {} but the schedule gives it {tolerance}",
+                logged.stats.generation, logged.stats.tolerance
+            )));
+        }
+    }
+    if log.generations.len() >= schedule.len() {
+        check_same_model(model, log)?;
+        return Ok(Vec::new());
+    }
+    let mut sampler = sampler_after(
+        model,
+        distance,
+        log,
+        description,
+        schedule.len(),
+        quantiles,
+        observer,
+    )?;
+    run_schedule(&mut sampler, schedule);
+    Ok(sampler.finish())
 }
 
 /// The `q * n`th smallest of an ascending-sorted sample (truncating, so the

@@ -80,6 +80,9 @@ impl RunMeta {
 /// with `generation_completed`.
 pub trait RunObserver<M: CalibrationModel>: Sync {
     fn run_started(&self, _model: &M, _meta: &RunMeta) {}
+    /// A run is continuing after its first `completed` generations, in place
+    /// of `run_started`. `meta` describes the run as it is now planned.
+    fn run_resumed(&self, _model: &M, _meta: &RunMeta, _completed: usize) {}
     fn generation_started(&self, _generation: usize, _tolerance: f64) {}
     /// `attempts` counts this particle's own simulations, accepted or not.
     fn particle_accepted(
@@ -111,6 +114,10 @@ impl<M: CalibrationModel, A: RunObserver<M>, B: RunObserver<M>> RunObserver<M> f
     fn run_started(&self, model: &M, meta: &RunMeta) {
         self.0.run_started(model, meta);
         self.1.run_started(model, meta);
+    }
+    fn run_resumed(&self, model: &M, meta: &RunMeta, completed: usize) {
+        self.0.run_resumed(model, meta, completed);
+        self.1.run_resumed(model, meta, completed);
     }
     fn generation_started(&self, generation: usize, tolerance: f64) {
         self.0.generation_started(generation, tolerance);
@@ -178,6 +185,11 @@ impl<M: CalibrationModel> RunObserver<M> for StdoutObserver {
         }
         *self.started.lock().unwrap() = Some(Instant::now());
         self.bar.start(meta.n_particles as u64);
+    }
+
+    fn run_resumed(&self, model: &M, meta: &RunMeta, completed: usize) {
+        self.run_started(model, meta);
+        println!("Resuming after {completed} completed generations");
     }
 
     fn generation_started(&self, generation: usize, tolerance: f64) {
@@ -251,7 +263,11 @@ impl<M: CalibrationModel> RunObserver<M> for StdoutObserver {
 /// pending when a generation completes is written before its
 /// `generation_completed` line.
 /// - `generation_abandoned`: `generation`.
-/// - `run_finished`: `generations`.
+/// - `run_finished`: `generations`, the number completed since `run_started`.
+/// - `run_resumed`: `completed`, the generations kept from before, and
+///   `n_generations`, the total now planned. The run is under way again; a
+///   generation that was in progress when the run stopped starts over, with a
+///   second `generation_started`.
 ///
 /// Integer parameters are written as JSON integers, real ones as numbers.
 pub struct JsonlObserver {
@@ -266,6 +282,8 @@ pub struct JsonlObserver {
     rejected_seen: AtomicUsize,
     rejected: Mutex<Vec<(f64, Vec<f64>)>>,
     flush_every: Duration,
+    // Generations completed since `run_started`, across resumes.
+    completed: AtomicUsize,
 }
 
 struct Live {
@@ -283,7 +301,23 @@ impl JsonlObserver {
         fs::create_dir_all(&dir)?;
         let path = dir.join("run.jsonl");
         let file = File::create(&path)?;
-        Ok(JsonlObserver {
+        Ok(Self::new(path, run_id, file))
+    }
+
+    /// Opens the existing `<runs_dir>/<run_id>/run.jsonl` to add to it, for a
+    /// run that is being resumed. A last line cut short when the run stopped
+    /// is removed, so the next event starts on a line of its own.
+    pub fn append(runs_dir: impl AsRef<Path>, run_id: &str) -> io::Result<Self> {
+        let path = runs_dir.as_ref().join(run_id).join("run.jsonl");
+        let text = fs::read(&path)?;
+        let complete = text.iter().rposition(|&b| b == b'\n').map_or(0, |i| i + 1);
+        let file = fs::OpenOptions::new().append(true).open(&path)?;
+        file.set_len(complete as u64)?;
+        Ok(Self::new(path, run_id, file))
+    }
+
+    fn new(path: PathBuf, run_id: &str, file: File) -> Self {
+        JsonlObserver {
             path,
             id: run_id.to_string(),
             writer: Mutex::new(BufWriter::new(file)),
@@ -299,7 +333,8 @@ impl JsonlObserver {
             rejected_seen: AtomicUsize::new(0),
             rejected: Mutex::new(Vec::new()),
             flush_every: Duration::from_millis(100),
-        })
+            completed: AtomicUsize::new(0),
+        }
     }
 
     /// Like [`create`](Self::create) with a UTC timestamp (`YYYYMMDD-HHMMSS`)
@@ -366,7 +401,16 @@ impl JsonlObserver {
 }
 
 impl<M: CalibrationModel> RunObserver<M> for JsonlObserver {
+    fn run_resumed(&self, _model: &M, meta: &RunMeta, completed: usize) {
+        self.completed.store(completed, Ordering::Relaxed);
+        self.write_line(&format!(
+            r#"{{"type":"run_resumed","completed":{completed},"n_generations":{}}}"#,
+            meta.n_generations
+        ));
+    }
+
     fn run_started(&self, _model: &M, meta: &RunMeta) {
+        self.completed.store(0, Ordering::Relaxed);
         let mut line = String::new();
         line.push_str(r#"{"type":"run_started","version":1,"id":"#);
         push_str(&mut line, &self.id);
@@ -523,6 +567,8 @@ impl<M: CalibrationModel> RunObserver<M> for JsonlObserver {
         }
         line.push_str("]}");
         self.write_line(&line);
+        self.completed
+            .store(stats.generation + 1, Ordering::Relaxed);
     }
 
     fn generation_abandoned(&self, generation: usize) {
@@ -531,10 +577,10 @@ impl<M: CalibrationModel> RunObserver<M> for JsonlObserver {
         ));
     }
 
-    fn run_finished(&self, _model: &M, generations: &[Generation<M>]) {
+    fn run_finished(&self, _model: &M, _generations: &[Generation<M>]) {
         self.write_line(&format!(
             r#"{{"type":"run_finished","generations":{}}}"#,
-            generations.len()
+            self.completed.load(Ordering::Relaxed)
         ));
     }
 }

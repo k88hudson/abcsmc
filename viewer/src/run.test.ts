@@ -111,6 +111,40 @@ describe("applyLine", () => {
     expect(s.badLines).toBe(0);
   });
 
+  it("starts a generation over when a stopped run is resumed", () => {
+    const s = emptyRun();
+    applyLine(s, started);
+    const start = JSON.stringify({
+      type: "generation_started",
+      generation: 0,
+      tolerance: 1,
+    });
+    applyLine(s, start);
+    applyLine(
+      s,
+      JSON.stringify({
+        type: "progress",
+        generation: 0,
+        accepted: 1,
+        attempts: 2,
+        batch: [{ params: [0.5, 1], distance: 0.1 }],
+      }),
+    );
+    applyLine(s, JSON.stringify({ type: "run_finished", generations: 0 }));
+
+    applyLine(
+      s,
+      JSON.stringify({ type: "run_resumed", completed: 0, n_generations: 3 }),
+    );
+    expect(s.status).toBe("running");
+    expect(s.nGenerations).toBe(3);
+    applyLine(s, start);
+    expect(s.generations).toHaveLength(1);
+    expect(s.generations[0]!.live).toEqual([]);
+    expect(s.generations[0]!.liveAccepted).toBe(0);
+    expect(s.generations[0]!.liveAttempts).toBe(0);
+  });
+
   it("counts unparseable lines and skips blanks", () => {
     const s = emptyRun();
     applyLine(s, "");

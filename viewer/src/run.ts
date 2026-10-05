@@ -129,6 +129,7 @@ export type RunEvent =
     }
   | { type: "generation_abandoned"; generation: number }
   | { type: "run_finished"; generations: number }
+  | { type: "run_resumed"; completed: number; n_generations: number }
   | { type: "projection"; label: string; trajectories: ProjectedTrajectory[] };
 
 export function emptyRun(): RunState {
@@ -193,6 +194,10 @@ export function applyEvent(state: RunState, event: RunEvent): RunState {
       const g = generationAt(state, event.generation);
       g.tolerance = event.tolerance;
       g.status = "running";
+      // A resumed run starts the generation it was stopped in over.
+      g.live = [];
+      g.liveAccepted = 0;
+      g.liveAttempts = 0;
       break;
     }
     case "progress": {
@@ -222,6 +227,11 @@ export function applyEvent(state: RunState, event: RunEvent): RunState {
     }
     case "run_finished": {
       state.status = "finished";
+      break;
+    }
+    case "run_resumed": {
+      state.status = "running";
+      state.nGenerations = event.n_generations;
       break;
     }
     case "projection": {

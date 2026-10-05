@@ -62,7 +62,9 @@ mod reader {
     use serde::Deserialize;
 
     use super::{ProjectedTrajectory, Projection};
-    use crate::{Draw, GenerationStats, ParamMeta, ParamPrior, Params, Value, resample_indices};
+    use crate::{
+        Draw, GenerationStats, ParamMeta, ParamPrior, Params, Population, Value, resample_indices,
+    };
 
     /// A run log read back from disk: what the run declared, every completed
     /// generation's weighted particles, and any projections appended since.
@@ -74,10 +76,15 @@ mod reader {
         /// What the run's distance measures, if it said.
         pub distance_description: Option<String>,
         pub n_particles: usize,
+        /// The quantile schedule, if the run's tolerances came from one.
+        pub quantiles: Option<Vec<f64>>,
         pub params: Vec<ParamMeta>,
         pub observed: Option<Vec<f64>>,
+        /// The completed generations. A generation that was under way when
+        /// the log was read is not among them.
         pub generations: Vec<LoggedGeneration>,
-        /// Whether the log records the run's end.
+        /// Whether the log ends with the run's end. A run that was resumed
+        /// after finishing is unfinished until it ends again.
         pub finished: bool,
         pub projections: Vec<Projection>,
     }
@@ -106,6 +113,15 @@ mod reader {
     }
 
     impl LoggedGeneration {
+        /// What the next generation proposes from, to resume the run with
+        /// [`Sampler::resume`](crate::Sampler::resume).
+        pub fn population(&self) -> Population {
+            Population {
+                params: self.particles.iter().map(|p| p.params.clone()).collect(),
+                weights: self.particles.iter().map(|p| p.weight).collect(),
+            }
+        }
+
         /// `n` particles drawn with replacement in proportion to their weights.
         pub fn resample(&self, n: usize, rng: &mut impl rand::Rng) -> Vec<&LoggedParticle> {
             resample_indices(self.particles.iter().map(|p| p.weight), n, rng)
@@ -160,9 +176,12 @@ mod reader {
             #[serde(default)]
             distance_description: Option<String>,
             n_particles: usize,
+            #[serde(default)]
+            quantiles: Option<Vec<f64>>,
             params: Vec<ParamSpec>,
             observed: Option<Vec<Option<f64>>>,
         },
+        RunResumed {},
         GenerationCompleted {
             generation: usize,
             stats: StatsSpec,
@@ -203,6 +222,7 @@ mod reader {
                         description,
                         distance_description,
                         n_particles,
+                        quantiles,
                         params,
                         observed,
                     } => {
@@ -227,6 +247,7 @@ mod reader {
                             description,
                             distance_description,
                             n_particles,
+                            quantiles,
                             params,
                             observed: observed.map(|series| {
                                 series.into_iter().map(|v| v.unwrap_or(f64::NAN)).collect()
@@ -266,6 +287,7 @@ mod reader {
                                 });
                             }
                             Event::RunFinished {} => log.finished = true,
+                            Event::RunResumed {} => log.finished = false,
                             Event::Projection {
                                 label,
                                 trajectories,
