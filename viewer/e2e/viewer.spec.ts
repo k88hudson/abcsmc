@@ -75,14 +75,14 @@ test.describe("without file handles", () => {
     await page.getByRole("option", { name: "All generations" }).click();
     await expect(cells.locator(".gen-cell")).toHaveCount(5);
 
-    // Every column header explains itself on hover.
-    const headers = page.locator(".gen-table th");
-    await expect(headers).toHaveCount(5);
-    for (const th of await headers.all())
-      expect(await th.getAttribute("title")).toMatch(/\S/);
-    await expect(headers.nth(3)).toHaveAttribute(
-      "title",
-      /Effective sample size/,
+    // Every column header has a hint icon that explains it on hover.
+    const hints = page.locator(".gen-table th").getByRole("button", {
+      name: "More info",
+    });
+    await expect(hints).toHaveCount(5);
+    await hints.nth(3).hover();
+    await expect(page.locator(".HintContent")).toContainText(
+      "Effective sample size",
     );
 
     await page.locator(".gen-table tbody tr").nth(1).click();

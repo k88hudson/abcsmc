@@ -1,6 +1,12 @@
 <script setup lang="ts">
 import { computed, onMounted, onScopeDispose, reactive, ref, watch } from "vue";
-import { Button, SelectBox, SidebarLayout, Toggle } from "cfasim-ui/components";
+import {
+  Button,
+  Hint,
+  SelectBox,
+  SidebarLayout,
+  Toggle,
+} from "cfasim-ui/components";
 import { BarChart, DataTable, LineChart } from "cfasim-ui/charts";
 import ChartTip from "./ChartTip.vue";
 import { columnsToCsv, fileStem } from "./csv";
@@ -1166,30 +1172,39 @@ function fmt(x: number, digits = 3): string {
         <table class="gen-table">
           <thead>
             <tr>
-              <th
-                title="Generation: 0 is the prior sample, later ones are SMC steps. Click a completed row to show it."
-              >
-                Gen
+              <th>
+                <span class="th-label"
+                  >Gen
+                  <Hint
+                    text="Generation: 0 is the prior sample, later ones are SMC steps. Click a completed row to show it."
+                /></span>
               </th>
-              <th
-                class="num"
-                title="Tolerance: the largest distance from the target a simulation may have to be accepted."
-              >
-                Tol.
+              <th class="num">
+                <span class="th-label"
+                  >Tol.
+                  <Hint
+                    text="Tolerance: the largest distance from the target a simulation may have to be accepted."
+                /></span>
               </th>
-              <th
-                class="num"
-                title="Acceptance ratio: accepted particles over simulations run. While running, accepted so far out of the particles wanted."
-              >
-                Acc.
+              <th class="num">
+                <span class="th-label"
+                  >Acc.
+                  <Hint
+                    text="Acceptance ratio: accepted particles over simulations run. While running, accepted so far out of the particles wanted."
+                /></span>
               </th>
-              <th
-                class="num"
-                title="Effective sample size: 1 / Σ w², the number of equally weighted particles the weights are worth."
-              >
-                ESS
+              <th class="num">
+                <span class="th-label"
+                  >ESS
+                  <Hint
+                    text="Effective sample size: 1 / Σ w², the number of equally weighted particles the weights are worth."
+                /></span>
               </th>
-              <th class="num" title="Seconds the generation took.">s</th>
+              <th class="num">
+                <span class="th-label"
+                  >s <Hint text="Seconds the generation took."
+                /></span>
+              </th>
             </tr>
           </thead>
           <tbody>
@@ -1808,10 +1823,10 @@ h4 small {
   border-collapse: collapse;
   font-size: 0.85rem;
 }
-.gen-table th[title] {
-  cursor: help;
-  text-decoration: underline dotted;
-  text-underline-offset: 0.2em;
+.gen-table .th-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.15em;
 }
 .gen-table th,
 .gen-table td {
