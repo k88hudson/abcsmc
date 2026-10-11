@@ -36,11 +36,119 @@
 /// Keep them on the model and splice them in when building the simulator's own
 /// parameters, e.g. `Parameters { r0: draw.r0, ..self.base.clone() }`.
 ///
+/// A declaration can extend another with `extends`, for a fit that draws
+/// everything another does plus some more. The draw gets a `base` field of
+/// the extended draw type ahead of its own fields, the priors struct a
+/// `base` of the extended priors, and the engine's layout is the base's
+/// parameters followed by the new ones:
+///
+/// ```
+/// use abcsmc::{Draw, Priors, define_priors, exponential_prior, uniform_prior};
+///
+/// define_priors! {
+///     pub struct RenewalDraw / RenewalPriors {
+///         r0: Real,
+///     }
+/// }
+/// define_priors! {
+///     /// The renewal fit with a change in transmission on a fitted day.
+///     pub struct ChangeDraw / ChangePriors extends RenewalDraw / RenewalPriors {
+///         multiplier: Real,
+///         day: Real,
+///     }
+/// }
+///
+/// let priors: Priors = ChangePriors {
+///     base: RenewalPriors { r0: exponential_prior!(rate = 1.0).unwrap() },
+///     multiplier: uniform_prior!(a = 0.0, b = 1.0).unwrap(),
+///     day: uniform_prior!(a = 0.0, b = 30.0).unwrap(),
+/// }
+/// .into();
+/// assert_eq!(ChangeDraw::NAMES, ["r0", "multiplier", "day"]);
+/// assert_eq!(priors.len(), 3);
+/// ```
+///
 /// [`Draw`]: crate::Draw
 /// [`RealPrior`]: crate::RealPrior
 /// [`IntPrior`]: crate::IntPrior
 #[macro_export]
 macro_rules! define_priors {
+    (
+        $(#[$meta:meta])*
+        $vis:vis struct $draw:ident / $priors:ident extends $base:ident / $base_priors:ident {
+            $(
+                $(#[$field_meta:meta])*
+                $field:ident : $kind:ident
+            ),* $(,)?
+        }
+    ) => {
+        $(#[$meta])*
+        #[derive(Clone, Debug, PartialEq)]
+        $vis struct $draw {
+            /// The parameters of the draw this one extends.
+            pub base: $base,
+            $(
+                $(#[$field_meta])*
+                pub $field: $crate::__draw_value_ty!($kind),
+            )*
+        }
+
+        #[doc = ::core::concat!(
+            "Priors over the fields of [`", ::core::stringify!($draw), "`]: ",
+            "those of its `base` and its own. ",
+            "Every field must be given a prior, so omitting one is a compile error."
+        )]
+        $vis struct $priors {
+            pub base: $base_priors,
+            $(
+                pub $field: $crate::__draw_prior_ty!($kind),
+            )*
+        }
+
+        impl ::core::convert::From<$priors> for $crate::Priors {
+            fn from(priors: $priors) -> $crate::Priors {
+                $crate::Priors::from(priors.base)
+                    $( .push(priors.$field) )*
+            }
+        }
+
+        impl $crate::Draw for $draw {
+            const NAMES: &'static [&'static str] = {
+                const BASE: &[&str] = <$base as $crate::Draw>::NAMES;
+                const OWN: &[&str] = &[$( ::core::stringify!($field) ),*];
+                const ALL: [&str; BASE.len() + OWN.len()] = {
+                    let mut all = [""; BASE.len() + OWN.len()];
+                    let mut i = 0;
+                    while i < BASE.len() {
+                        all[i] = BASE[i];
+                        i += 1;
+                    }
+                    while i < all.len() {
+                        all[i] = OWN[i - BASE.len()];
+                        i += 1;
+                    }
+                    all
+                };
+                &ALL
+            };
+
+            fn from_values(values: &[$crate::Value]) -> Self {
+                let n = <$base as $crate::Draw>::NAMES.len().min(values.len());
+                let (base, own) = values.split_at(n);
+                let mut values = own.iter();
+                Self {
+                    base: <$base as $crate::Draw>::from_values(base),
+                    $(
+                        $field: $crate::__draw_read!(
+                            $kind,
+                            ::core::stringify!($field),
+                            values.next()
+                        ),
+                    )*
+                }
+            }
+        }
+    };
     (
         $(#[$meta:meta])*
         $vis:vis struct $draw:ident / $priors:ident {
