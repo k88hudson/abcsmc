@@ -1714,6 +1714,13 @@ function fmt(x: number, digits = 3): string {
 :deep(.TableOuter) {
   max-width: 100%;
 }
+/* The main scroll pane is not positioned in cfasim-ui, so an absolutely
+   positioned descendant (a SelectBox's visually hidden label) is contained
+   by the whole layout instead, escapes the pane's clipping, and stretches
+   the page: the whole layout then scrolls off the top of the window. */
+:deep(.MainScroll) {
+  position: relative;
+}
 .target-table {
   margin-top: 1rem;
 }

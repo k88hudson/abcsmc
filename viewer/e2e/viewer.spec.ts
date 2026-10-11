@@ -75,6 +75,13 @@ test.describe("without file handles", () => {
     await page.getByRole("option", { name: "All generations" }).click();
     await expect(cells.locator(".gen-cell")).toHaveCount(5);
 
+    // Only the panes scroll, never the page: nothing may escape them.
+    expect(
+      await page.evaluate(
+        () => document.documentElement.scrollHeight - window.innerHeight,
+      ),
+    ).toBe(0);
+
     // Every column header has a hint icon that explains it on hover.
     const hints = page.locator(".gen-table th").getByRole("button", {
       name: "More info",
