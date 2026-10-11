@@ -67,10 +67,32 @@ test.describe("without file handles", () => {
     await expect(page.getByTestId("projections")).toContainText("20 particles");
     await expect(page.getByTestId("trajectories")).toBeHidden();
     await page.getByRole("tab", { name: "Calibration" }).click();
-    await expect(page.getByTestId("cells").locator(".gen-cell")).toHaveCount(5);
+    // Per generation shows the selected generation alone until asked for all.
+    const cells = page.getByTestId("cells");
+    await expect(cells.locator(".gen-cell")).toHaveCount(1);
+    await expect(cells.locator(".gen-cell h4")).toContainText("Gen 4");
+    await cells.getByRole("combobox", { name: "Generation" }).click();
+    await page.getByRole("option", { name: "All generations" }).click();
+    await expect(cells.locator(".gen-cell")).toHaveCount(5);
 
     await page.locator(".gen-table tbody tr").nth(1).click();
     await expect(page.getByTestId("trajectories")).toContainText("Gen 1");
+    await expect(cells.locator(".gen-cell")).toHaveCount(1);
+    await expect(cells.locator(".gen-cell h4")).toContainText("Gen 1");
+  });
+
+  test("a run under way says which generation it is on", async ({ page }) => {
+    // The fixture cut off just after generation 2 starts: the third of five.
+    const lines = (await readFile(fixture, "utf8")).split("\n").slice(0, 6);
+    await page.goto("/");
+    await page.getByLabel("Load run.jsonl").setInputFiles({
+      name: "partial.jsonl",
+      mimeType: "application/jsonl",
+      buffer: Buffer.from(lines.join("\n")),
+    });
+    await expect(page.getByTestId("status")).toHaveText(
+      "Running Gen 2, 3 of 5",
+    );
   });
 
   test("the posteriors table scrolls sideways on a narrow screen", async ({

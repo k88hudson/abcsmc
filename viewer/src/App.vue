@@ -229,7 +229,7 @@ const statusLabel = computed(() => {
   if (run.status === "finished") return "Finished";
   const g = current.value;
   return g
-    ? `Running generation ${g.generation} of ${run.nGenerations - 1}`
+    ? `Running ${generationLabel(g)}, ${g.generation + 1} of ${run.nGenerations}`
     : "Running";
 });
 
@@ -994,10 +994,15 @@ const summaryTable = computed(() => {
   };
 });
 
+// One block per generation: every completed one under "All generations",
+// otherwise only the shown generation.
 const cells = computed(() => {
   const gens = completed.value;
   const prior = gens[0];
-  return gens.map((g) => {
+  const shown = allGenerations.value
+    ? gens
+    : gens.filter((g) => g === shownGeneration.value);
+  return shown.map((g) => {
     const weights = normalizedWeights(g.particles.map((p) => p.weight));
     const priorWeights = prior
       ? normalizedWeights(prior.particles.map((p) => p.weight))
@@ -1308,7 +1313,7 @@ function fmt(x: number, digits = 3): string {
             Trajectories
             <small>{{ trajectorySubtitle(trajectoryView) }}</small>
           </h2>
-          <div class="trajectory-controls">
+          <div class="chart-controls">
             <SelectBox
               v-model="generationChoice"
               :options="generationOptions"
@@ -1411,6 +1416,15 @@ function fmt(x: number, digits = 3): string {
 
         <section v-if="cells.length" data-testid="cells">
           <h2>Per generation</h2>
+          <div class="chart-controls">
+            <SelectBox
+              v-model="generationChoice"
+              :options="generationOptions"
+              label="Generation"
+              hide-label
+              class="generation-select"
+            />
+          </div>
           <div class="cells">
             <div
               v-for="cell in cells"
@@ -1701,7 +1715,7 @@ h4 small {
 .correlation-controls > * {
   width: 16rem;
 }
-.trajectory-controls {
+.chart-controls {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
