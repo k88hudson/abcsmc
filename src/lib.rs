@@ -21,6 +21,8 @@ mod step;
 pub use step::*;
 mod particle;
 pub use particle::*;
+mod marker;
+pub use marker::*;
 mod observer;
 pub use observer::*;
 mod platform;

@@ -6,8 +6,9 @@
 use std::path::Path;
 
 use abcsmc::{
-    CalibrationModel, Distance, Generation, JsonlObserver, Particle, Priors, StdoutObserver,
-    define_priors, discrete_uniform_prior, distance, exponential_prior, run_quantiles_with,
+    CalibrationModel, Distance, Generation, JsonlObserver, Marker, Particle, Priors,
+    StdoutObserver, define_priors, discrete_uniform_prior, distance, exponential_prior,
+    run_quantiles_with,
 };
 use rand::{SeedableRng, rngs::StdRng};
 use serde::Serialize;
@@ -115,6 +116,16 @@ impl Distance<RenewalOutput> for IncidenceDistance {
 
     fn observed(&self) -> Option<Vec<f64>> {
         Some(as_f64s(&self.observed))
+    }
+
+    /// The last fitted day, and under the weekly metric each week's first day.
+    fn markers(&self) -> Vec<Marker> {
+        let days = self.observed.len();
+        let mut markers = vec![Marker::labelled((days - 1) as f64, "Last fitted day")];
+        if let Metric::WeeklyL1 = self.metric {
+            markers.extend((7..days).step_by(7).map(|day| Marker::at(day as f64)));
+        }
+        markers
     }
 }
 

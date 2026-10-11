@@ -14,6 +14,7 @@ export interface ChartPalette {
   median: string;
   band: string;
   bandOpacity: [number, number];
+  marker: string;
 }
 
 const light: ChartPalette = {
@@ -28,6 +29,7 @@ const light: ChartPalette = {
   median: "#1d4ed8",
   band: "#2563eb",
   bandOpacity: [0.15, 0.3],
+  marker: "#64748b",
 };
 
 const dark: ChartPalette = {
@@ -42,6 +44,7 @@ const dark: ChartPalette = {
   median: "#86b6ef",
   band: "#3987e5",
   bandOpacity: [0.2, 0.4],
+  marker: "#94a3b8",
 };
 
 export function chartPalette(isDark: boolean): ChartPalette {

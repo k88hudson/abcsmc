@@ -98,6 +98,31 @@ test.describe("without file handles", () => {
     await expect(cells.locator(".gen-cell h4")).toContainText("Gen 1");
   });
 
+  test("markers are drawn on the trajectory, target, and projection charts", async ({
+    page,
+  }) => {
+    await page.goto("/");
+    await page.getByLabel("Load run.jsonl").setInputFiles(fixture);
+    await expect(page.getByTestId("status")).toHaveText("Finished");
+
+    // The fixture ends with a markers event: one labelled, one not.
+    const trajectories = page.getByTestId("trajectories");
+    await expect(trajectories.locator(".line-chart-marker")).toHaveCount(2);
+    await expect(trajectories.locator('svg[role="img"]')).toContainText(
+      "Last fitted day",
+    );
+
+    await page.getByRole("tab", { name: "Target data" }).click();
+    await expect(
+      page.getByTestId("target").locator(".line-chart-marker"),
+    ).toHaveCount(2);
+    await page.getByRole("tab", { name: "Projections" }).click();
+    const projections = page.getByTestId("projections");
+    await expect(projections.locator(".line-chart-marker")).toHaveCount(
+      2 * (await projections.locator(".line-chart-wrapper").count()),
+    );
+  });
+
   test("a run under way says which generation it is on", async ({ page }) => {
     // The fixture cut off just after generation 2 starts: the third of five.
     const lines = (await readFile(fixture, "utf8")).split("\n").slice(0, 6);

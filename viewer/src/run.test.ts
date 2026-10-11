@@ -240,6 +240,37 @@ describe("projections", () => {
   });
 });
 
+describe("markers", () => {
+  it("come with the run and appended ones merge by label", () => {
+    const s = emptyRun();
+    applyLine(s, started);
+    expect(s.markers).toEqual([]);
+    applyLine(
+      s,
+      JSON.stringify({
+        ...JSON.parse(started),
+        markers: [{ x: 1, label: "scored" }],
+      }),
+    );
+    applyLine(
+      s,
+      JSON.stringify({
+        type: "markers",
+        markers: [
+          { x: 2, label: null },
+          { x: 3, label: "scored" },
+          { x: 4, label: "change" },
+        ],
+      }),
+    );
+    expect(s.markers).toEqual([
+      { x: 3, label: "scored" },
+      { x: 2, label: null },
+      { x: 4, label: "change" },
+    ]);
+  });
+});
+
 describe("priorLabel", () => {
   it("prints the family and its parameters by name", () => {
     expect(priorLabel({ type: "Uniform", a: 0.5, b: 3 })).toBe(

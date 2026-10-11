@@ -78,6 +78,14 @@ export interface Projection {
   trajectories: ProjectedTrajectory[];
 }
 
+// A position on the series' axis that the charts mark with a vertical line:
+// a day the distance scores on, when a change takes effect. Logged with the
+// run, and added to by `markers` events appended after it.
+export interface Marker {
+  x: number;
+  label: string | null;
+}
+
 export interface RunState {
   id: string | null;
   description: string | null;
@@ -89,6 +97,7 @@ export interface RunState {
   params: ParamMeta[];
   // Non-finite values are written as null: points the series does not have.
   observed: (number | null)[] | null;
+  markers: Marker[];
   generations: Generation[];
   projections: Projection[];
   status: "empty" | "running" | "finished";
@@ -109,6 +118,8 @@ export type RunEvent =
       quantiles: number[] | null;
       params: ParamMeta[];
       observed: (number | null)[] | null;
+      // Absent in logs written before markers existed.
+      markers?: Marker[];
     }
   | { type: "generation_started"; generation: number; tolerance: number | null }
   | {
@@ -130,7 +141,8 @@ export type RunEvent =
   | { type: "generation_abandoned"; generation: number }
   | { type: "run_finished"; generations: number }
   | { type: "run_resumed"; completed: number; n_generations: number }
-  | { type: "projection"; label: string; trajectories: ProjectedTrajectory[] };
+  | { type: "projection"; label: string; trajectories: ProjectedTrajectory[] }
+  | { type: "markers"; markers: Marker[] };
 
 export function emptyRun(): RunState {
   return {
@@ -144,6 +156,7 @@ export function emptyRun(): RunState {
     params: [],
     observed: null,
     generations: [],
+    markers: [],
     projections: [],
     status: "empty",
     lines: 0,
@@ -186,6 +199,7 @@ export function applyEvent(state: RunState, event: RunEvent): RunState {
         quantiles: event.quantiles,
         params: event.params,
         observed: event.observed,
+        markers: event.markers ?? [],
         status: "running",
       });
       break;
@@ -232,6 +246,18 @@ export function applyEvent(state: RunState, event: RunEvent): RunState {
     case "run_resumed": {
       state.status = "running";
       state.nGenerations = event.n_generations;
+      break;
+    }
+    // A labelled marker replaces an earlier one of the same label.
+    case "markers": {
+      for (const marker of event.markers) {
+        const existing =
+          marker.label === null
+            ? -1
+            : state.markers.findIndex((m) => m.label === marker.label);
+        if (existing >= 0) state.markers[existing] = marker;
+        else state.markers.push(marker);
+      }
       break;
     }
     case "projection": {

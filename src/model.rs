@@ -1,4 +1,6 @@
-use crate::{Draw, PerturbationKernel, Priors, VarianceAdapter, default_adapter, default_kernel};
+use crate::{
+    Draw, Marker, PerturbationKernel, Priors, VarianceAdapter, default_adapter, default_kernel,
+};
 
 /// A model to be fit with ABC-SMC: it declares priors and simulates. How a
 /// simulation is scored against data is a separate [`Distance`](crate::Distance)
@@ -45,5 +47,11 @@ pub trait CalibrationModel {
     /// [`Distance::observed`]: crate::Distance::observed
     fn trajectory(&self, _output: &Self::Output) -> Option<Vec<f64>> {
         None
+    }
+
+    /// Positions that matter to the model, for viewers to mark on the
+    /// trajectories: when a change takes effect, say. Not used by the engine.
+    fn markers(&self) -> Vec<Marker> {
+        Vec::new()
     }
 }

@@ -4,7 +4,7 @@
 use std::collections::HashSet;
 
 use abcsmc::{
-    CalibrationModel, Distance, Draw, Generation, IntPrior, JsonlObserver, Params, Priors,
+    CalibrationModel, Distance, Draw, Generation, IntPrior, JsonlObserver, Marker, Params, Priors,
     RealPrior, Silent, define_priors, distance_to, run, run_quantiles, run_quantiles_with,
     run_with,
 };
@@ -299,7 +299,8 @@ fn jsonl_log_records_the_whole_run() {
         "distance to 5",
         &[5.0, 5.0],
         |output: &f64, observed: &[f64]| (output - observed[0]).abs(),
-    );
+    )
+    .with_markers([Marker::labelled(1.0, "scored"), Marker::at(0.5)]);
     let generations = run_quantiles_with(
         &TracedModel,
         &distance,
@@ -334,6 +335,10 @@ fn jsonl_log_records_the_whole_run() {
     assert_eq!(started[0]["params"][0]["kind"], "real");
     assert!(started[0]["params"][0]["prior"]["type"].is_string());
     assert_eq!(started[0]["observed"], serde_json::json!([5.0, 5.0]));
+    assert_eq!(
+        started[0]["markers"],
+        serde_json::json!([{"x": 1.0, "label": "scored"}, {"x": 0.5, "label": null}])
+    );
 
     let gen_started = of_type("generation_started");
     assert_eq!(gen_started.len(), generations.len());

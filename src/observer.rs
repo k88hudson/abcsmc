@@ -10,8 +10,9 @@ use std::sync::Mutex;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
 
+use crate::marker::push_markers;
 use crate::platform::{Bar, Instant};
-use crate::{CalibrationModel, Distance, Draw, Generation, ParamPrior, Params, Value};
+use crate::{CalibrationModel, Distance, Draw, Generation, Marker, ParamPrior, Params, Value};
 
 /// What a run declares before its first generation.
 #[derive(Clone, Debug)]
@@ -28,6 +29,9 @@ pub struct RunMeta {
     pub params: Vec<ParamMeta>,
     /// The observed series the distance fits, if it exposes one.
     pub observed: Option<Vec<f64>>,
+    /// Positions to mark on the trajectories: the distance's, then the
+    /// model's.
+    pub markers: Vec<Marker>,
 }
 
 #[derive(Clone, Debug)]
@@ -69,6 +73,7 @@ impl RunMeta {
             quantiles: quantiles.map(<[f64]>::to_vec),
             params,
             observed: distance.observed(),
+            markers: [distance.markers(), model.markers()].concat(),
         }
     }
 }
@@ -247,7 +252,9 @@ impl<M: CalibrationModel> RunObserver<M> for StdoutObserver {
 ///   `distance_description` (each a string or `null`), `n_particles`, `n_generations`,
 ///   `quantiles` (or `null`), `params` (`[{name, kind, prior}]`, kind `real`
 ///   or `int`, prior a type-tagged document such as
-///   `{"type":"Uniform","a":0.5,"b":3.0}`), `observed` (or `null`).
+///   `{"type":"Uniform","a":0.5,"b":3.0}`), `observed` (or `null`), `markers`
+///   (`[{x, label}]`, label a string or `null`: the positions the distance and
+///   model mark on the trajectories, see [`Marker`]).
 /// - `generation_started`: `generation`, `tolerance` (`null` when infinite).
 /// - `progress`: `generation`, running `accepted` and `attempts` counts, and
 ///   `batch`, the `{params, distance}` of every particle accepted since the
@@ -268,6 +275,8 @@ impl<M: CalibrationModel> RunObserver<M> for StdoutObserver {
 ///   `n_generations`, the total now planned. The run is under way again; a
 ///   generation that was in progress when the run stopped starts over, with a
 ///   second `generation_started`.
+/// - `markers`: `markers` (`[{x, label}]`), appended after the run by
+///   [`append_markers`]; merged into the run's by label.
 ///
 /// Integer parameters are written as JSON integers, real ones as numbers.
 pub struct JsonlObserver {
@@ -440,6 +449,8 @@ impl<M: CalibrationModel> RunObserver<M> for JsonlObserver {
         }
         line.push_str(r#"],"observed":"#);
         push_opt_f64s(&mut line, meta.observed.as_deref());
+        line.push_str(r#","markers":"#);
+        push_markers(&mut line, &meta.markers);
         line.push('}');
         self.write_line(&line);
     }

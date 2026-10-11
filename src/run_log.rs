@@ -62,8 +62,10 @@ mod reader {
     use serde::Deserialize;
 
     use super::{ProjectedTrajectory, Projection};
+    use crate::marker::merge_markers;
     use crate::{
-        Draw, GenerationStats, ParamMeta, ParamPrior, Params, Population, Value, resample_indices,
+        Draw, GenerationStats, Marker, ParamMeta, ParamPrior, Params, Population, Value,
+        resample_indices,
     };
 
     /// A run log read back from disk: what the run declared, every completed
@@ -80,6 +82,8 @@ mod reader {
         pub quantiles: Option<Vec<f64>>,
         pub params: Vec<ParamMeta>,
         pub observed: Option<Vec<f64>>,
+        /// The run's markers, with any appended `markers` events merged in.
+        pub markers: Vec<Marker>,
         /// The completed generations. A generation that was under way when
         /// the log was read is not among them.
         pub generations: Vec<LoggedGeneration>,
@@ -132,6 +136,22 @@ mod reader {
     }
 
     #[derive(Deserialize)]
+    struct MarkerSpec {
+        x: f64,
+        #[serde(default)]
+        label: Option<String>,
+    }
+
+    impl From<MarkerSpec> for Marker {
+        fn from(spec: MarkerSpec) -> Self {
+            Marker {
+                x: spec.x,
+                label: spec.label,
+            }
+        }
+    }
+
+    #[derive(Deserialize)]
     struct ParamSpec {
         name: String,
         kind: String,
@@ -180,6 +200,11 @@ mod reader {
             quantiles: Option<Vec<f64>>,
             params: Vec<ParamSpec>,
             observed: Option<Vec<Option<f64>>>,
+            #[serde(default)]
+            markers: Vec<MarkerSpec>,
+        },
+        Markers {
+            markers: Vec<MarkerSpec>,
         },
         RunResumed {},
         GenerationCompleted {
@@ -225,6 +250,7 @@ mod reader {
                         quantiles,
                         params,
                         observed,
+                        markers,
                     } => {
                         let params = params
                             .into_iter()
@@ -252,6 +278,7 @@ mod reader {
                             observed: observed.map(|series| {
                                 series.into_iter().map(|v| v.unwrap_or(f64::NAN)).collect()
                             }),
+                            markers: markers.into_iter().map(Marker::from).collect(),
                             generations: Vec::new(),
                             finished: false,
                             projections: Vec::new(),
@@ -263,6 +290,10 @@ mod reader {
                             .as_mut()
                             .ok_or_else(|| invalid("the log does not start with run_started"))?;
                         match event {
+                            Event::Markers { markers } => merge_markers(
+                                &mut log.markers,
+                                markers.into_iter().map(Marker::from).collect(),
+                            ),
                             Event::GenerationCompleted {
                                 generation,
                                 stats,

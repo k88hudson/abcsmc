@@ -2,8 +2,9 @@
 #![cfg(feature = "serde")]
 
 use abcsmc::{
-    CalibrationModel, Draw as _, IntPrior, JsonlObserver, Posterior, Priors, ProjectedTrajectory,
-    Projection, RealPrior, RunLog, define_priors, distance_to, run_quantiles_with,
+    CalibrationModel, Draw as _, IntPrior, JsonlObserver, Marker, Posterior, Priors,
+    ProjectedTrajectory, Projection, RealPrior, RunLog, append_markers, define_priors, distance_to,
+    run_quantiles_with,
 };
 use rand::{SeedableRng, rngs::StdRng};
 
@@ -20,6 +21,10 @@ struct Product;
 impl CalibrationModel for Product {
     type Draw = Draw;
     type Output = f64;
+
+    fn markers(&self) -> Vec<Marker> {
+        vec![Marker::labelled(3.0, "model")]
+    }
 
     fn priors(&self) -> Priors {
         DrawPriors {
@@ -46,7 +51,8 @@ fn with_run<T>(
         "distance to 12",
         &[12.0],
         |output: &f64, observed: &[f64]| (output - observed[0]).abs(),
-    );
+    )
+    .with_markers([Marker::labelled(0.0, "scored")]);
     let generations =
         run_quantiles_with(&Product, &distance, &[0.5, 0.2], 100, "product fit", &log);
     drop(log);
@@ -65,6 +71,14 @@ fn a_log_reads_back_as_the_run_that_wrote_it() {
         assert_eq!(log.n_particles, 100);
         assert!(log.finished);
         assert_eq!(log.observed, Some(vec![12.0]));
+        assert_eq!(
+            log.markers,
+            vec![
+                Marker::labelled(0.0, "scored"),
+                Marker::labelled(3.0, "model")
+            ],
+            "the distance's markers, then the model's"
+        );
         let names: Vec<(&str, bool)> = log
             .params
             .iter()
@@ -148,6 +162,24 @@ fn projections_append_and_the_latest_label_wins() {
         assert_eq!(
             log.projections[1].trajectories[1],
             replacement.trajectories[1]
+        );
+    });
+}
+
+#[test]
+fn appended_markers_replace_by_label_and_add_the_rest() {
+    with_run("markers", |path, _| {
+        append_markers(path, &[Marker::labelled(1.0, "scored"), Marker::at(2.0)]).unwrap();
+        append_markers(path, &[Marker::labelled(4.0, "change")]).unwrap();
+        let log = RunLog::read(path).unwrap();
+        assert_eq!(
+            log.markers,
+            vec![
+                Marker::labelled(1.0, "scored"),
+                Marker::labelled(3.0, "model"),
+                Marker::at(2.0),
+                Marker::labelled(4.0, "change"),
+            ]
         );
     });
 }

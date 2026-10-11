@@ -11,7 +11,9 @@
 
 use std::path::Path;
 
-use abcsmc::{CalibrationModel, Generation, ProjectedTrajectory, Projection};
+use abcsmc::{
+    CalibrationModel, Generation, Marker, ProjectedTrajectory, Projection, append_markers,
+};
 use rand::{SeedableRng, rngs::StdRng};
 
 use crate::calibration::{RenewalDraw, RenewalFit};
@@ -87,4 +89,9 @@ pub fn write_scenarios(
         .append_to(log_path)
         .unwrap();
     }
+    append_markers(
+        log_path,
+        &[Marker::labelled(fitted_days as f64, "Transmission -30%")],
+    )
+    .unwrap();
 }

@@ -16,6 +16,8 @@
 //! - [`total_difference`]: compares totals only, ignoring timing.
 //! - [`relative_l1`]: `l1` as a fraction of the observed total.
 
+use crate::Marker;
+
 /// How far a simulated output is from the observed data. A particle is
 /// accepted when this is within the generation's tolerance.
 ///
@@ -35,6 +37,13 @@ pub trait Distance<O>: Sync {
     fn observed(&self) -> Option<Vec<f64>> {
         None
     }
+
+    /// Positions that matter to how outputs are scored, for viewers to mark:
+    /// the days a range is checked on, the edges of weekly bins, the end of
+    /// the fitted window. Not used by the engine.
+    fn markers(&self) -> Vec<Marker> {
+        Vec::new()
+    }
 }
 
 impl<O, F: Fn(&O) -> f64 + Sync> Distance<O> for F {
@@ -46,7 +55,16 @@ impl<O, F: Fn(&O) -> f64 + Sync> Distance<O> for F {
 /// A closure with a description. Build one with [`distance_fn`].
 pub struct DistanceFn<F> {
     description: String,
+    markers: Vec<Marker>,
     f: F,
+}
+
+impl<F> DistanceFn<F> {
+    /// Adds positions for viewers to mark, see [`Distance::markers`].
+    pub fn with_markers(mut self, markers: impl IntoIterator<Item = Marker>) -> Self {
+        self.markers.extend(markers);
+        self
+    }
 }
 
 /// A [`Distance`] from a closure and a description of what it measures.
@@ -56,6 +74,7 @@ where
 {
     DistanceFn {
         description: description.into(),
+        markers: Vec::new(),
         f,
     }
 }
@@ -68,6 +87,10 @@ impl<O, F: Fn(&O) -> f64 + Sync> Distance<O> for DistanceFn<F> {
     fn description(&self) -> Option<String> {
         Some(self.description.clone())
     }
+
+    fn markers(&self) -> Vec<Marker> {
+        self.markers.clone()
+    }
 }
 
 /// A distance to an observed series that it owns. Build one with
@@ -75,7 +98,16 @@ impl<O, F: Fn(&O) -> f64 + Sync> Distance<O> for DistanceFn<F> {
 pub struct DistanceTo<B, F> {
     description: String,
     observed: Vec<B>,
+    markers: Vec<Marker>,
     f: F,
+}
+
+impl<B, F> DistanceTo<B, F> {
+    /// Adds positions for viewers to mark, see [`Distance::markers`].
+    pub fn with_markers(mut self, markers: impl IntoIterator<Item = Marker>) -> Self {
+        self.markers.extend(markers);
+        self
+    }
 }
 
 /// A [`Distance`] to `observed`: the closure is handed each output together
@@ -106,6 +138,7 @@ where
     DistanceTo {
         description: description.into(),
         observed: observed.to_vec(),
+        markers: Vec::new(),
         f,
     }
 }
@@ -125,6 +158,10 @@ where
 
     fn observed(&self) -> Option<Vec<f64>> {
         Some(self.observed.iter().map(|x| x.to_f64()).collect())
+    }
+
+    fn markers(&self) -> Vec<Marker> {
+        self.markers.clone()
     }
 }
 

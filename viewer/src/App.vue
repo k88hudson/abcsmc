@@ -417,6 +417,17 @@ const projectionCharts = computed(() =>
   }),
 );
 
+// The run's markers as every series chart draws them: fixed vertical lines
+// in the theme's marker colour, labelled where the log labels them.
+const chartMarkers = computed(() =>
+  run.markers.map((marker) => ({
+    x: marker.x,
+    label: marker.label ?? undefined,
+    color: palette.value.marker,
+    draggable: false,
+  })),
+);
+
 // The observed series the distance fits, on its own.
 const targetChart = computed(() => {
   const observed = run.observed;
@@ -1376,6 +1387,7 @@ function fmt(x: number, digits = 3): string {
               <LineChart
                 zoom
                 :series="chart.series"
+                :markers="chartMarkers"
                 :height="trajectoryCharts.length > 1 ? 300 : 260"
                 x-label="Index"
                 y-label="Value"
@@ -1601,6 +1613,7 @@ function fmt(x: number, digits = 3): string {
         <LineChart
           zoom
           :series="targetChart.series"
+          :markers="chartMarkers"
           :height="220"
           x-label="Index"
           y-label="Value"
@@ -1665,6 +1678,7 @@ function fmt(x: number, digits = 3): string {
               zoom
               :series="chart.series"
               :areas="chart.areas"
+              :markers="chartMarkers"
               :height="280"
               x-label="Index"
               y-label="Value"
