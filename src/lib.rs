@@ -28,6 +28,10 @@ mod sampler;
 pub use sampler::*;
 mod run_log;
 pub use run_log::*;
+#[cfg(feature = "serde")]
+mod posterior;
+#[cfg(feature = "serde")]
+pub use posterior::*;
 
 /// One completed generation: its accepted particles and run statistics.
 pub struct Generation<M: CalibrationModel> {

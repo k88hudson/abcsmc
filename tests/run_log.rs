@@ -2,8 +2,8 @@
 #![cfg(feature = "serde")]
 
 use abcsmc::{
-    CalibrationModel, IntPrior, JsonlObserver, Priors, ProjectedTrajectory, Projection, RealPrior,
-    RunLog, define_priors, distance_to, run_quantiles_with,
+    CalibrationModel, Draw as _, IntPrior, JsonlObserver, Posterior, Priors, ProjectedTrajectory,
+    Projection, RealPrior, RunLog, define_priors, distance_to, run_quantiles_with,
 };
 use rand::{SeedableRng, rngs::StdRng};
 
@@ -193,5 +193,50 @@ fn resampling_follows_the_weights() {
         for (a, b) in draws.iter().zip(&in_memory) {
             assert_eq!(a.seed, b.seed);
         }
+    });
+}
+
+#[test]
+fn the_posterior_is_written_beside_the_log_with_the_models_documents() {
+    with_run("posterior", |path, generations| {
+        let log = RunLog::read(path).unwrap();
+        let posterior = Posterior::of(&log).unwrap();
+        assert_eq!(posterior.run, "posterior");
+        assert_eq!(posterior.generation, generations.len() - 1);
+        assert_eq!(posterior.params, ["rate", "count"]);
+        assert_eq!(posterior.real, [true, false]);
+        assert_eq!(posterior.len(), 100);
+        let last = generations.last().unwrap();
+        assert_eq!(posterior.draws[3][0], last.particles[3].params.real(0));
+        assert_eq!(posterior.weights[3], last.particles[3].weight);
+        assert_eq!(posterior.seeds[3], last.particles[3].seed);
+        assert_eq!(
+            posterior.column("count").unwrap()[3],
+            last.particles[3].params.int(1) as f64
+        );
+        assert_eq!(posterior.document, None);
+
+        // The model's view: the draw spliced into a parameter document.
+        let posterior = posterior.with_documents(3, |params| {
+            let draw = Draw::from_values(params.values());
+            serde_json::json!({
+                "rate": draw.rate,
+                "fixed": 7,
+                "items": [{"name": "count", "value": draw.count}],
+            })
+        });
+        let documents = posterior.document.as_ref().unwrap();
+        assert_eq!(documents.representative, 3);
+        assert_eq!(documents.paths, ["items[count].value", "rate"]);
+        assert_eq!(documents.parameters["fixed"], 7);
+        assert_eq!(
+            documents.reference,
+            [posterior.draws[3][1], posterior.draws[3][0]]
+        );
+        assert_eq!(documents.values.len(), 100);
+
+        posterior.write_beside(path).unwrap();
+        let file = path.with_file_name("posterior.json");
+        assert_eq!(Posterior::read(&file).unwrap(), posterior);
     });
 }
