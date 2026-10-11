@@ -92,7 +92,7 @@ function watchHandle(handle: FileSystemFileHandle) {
   source.value = handle.name;
   live.value = true;
   stopTail = tailHandle(handle, onLines, (e) => {
-    error.value = String(e);
+    error.value = e === null ? null : String(e);
   });
 }
 

@@ -23,15 +23,26 @@ export async function readFile(file: File, onLines: OnLines): Promise<void> {
 // Bytes of the file's start compared on every poll to notice a restart.
 const HEADER_BYTES = 512;
 
+// Consecutive failed polls before a NotReadableError is reported.
+const MAX_UNREADABLE_POLLS = 5;
+
+// Chromium throws this when the file changed between `getFile()` and the
+// read of its contents, which is routine while another process appends.
+export const isTransientRead = (error: unknown): boolean =>
+  error instanceof DOMException && error.name === "NotReadableError";
+
 // Re-reads a file handle on an interval, delivering only the bytes past what
 // was already read. Works while another process appends to the file. A run
 // restarted into the same path is detected by its first line changing (the
 // run_started event carries the run id), not only by the file shrinking, so
 // a fast restart that outgrows the old offset within one poll still resets.
+// A read that fails because the writer got there first is retried on the
+// next poll; `onError` hears of it only once it keeps failing, and is given
+// `null` when a later poll succeeds.
 export function tailHandle(
   handle: FileSystemFileHandle,
   onLines: OnLines,
-  onError: (error: unknown) => void,
+  onError: (error: unknown | null) => void,
   intervalMs = 1000,
 ): () => void {
   let offset = 0;
@@ -39,6 +50,7 @@ export function tailHandle(
   let splitter = new LineSplitter();
   let stopped = false;
   let busy = false;
+  let unreadable = 0;
 
   const poll = async () => {
     if (stopped || busy) return;
@@ -59,8 +71,15 @@ export function tailHandle(
         offset = file.size;
         onLines(splitter.push(bytes));
       }
+      if (unreadable >= MAX_UNREADABLE_POLLS) onError(null);
+      unreadable = 0;
     } catch (error) {
-      onError(error);
+      if (isTransientRead(error)) {
+        unreadable += 1;
+        if (unreadable === MAX_UNREADABLE_POLLS) onError(error);
+      } else {
+        onError(error);
+      }
     } finally {
       busy = false;
     }
