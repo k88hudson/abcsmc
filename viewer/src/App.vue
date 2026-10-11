@@ -1166,11 +1166,30 @@ function fmt(x: number, digits = 3): string {
         <table class="gen-table">
           <thead>
             <tr>
-              <th>Gen</th>
-              <th class="num">Tol.</th>
-              <th class="num">Acc.</th>
-              <th class="num">ESS</th>
-              <th class="num">s</th>
+              <th
+                title="Generation: 0 is the prior sample, later ones are SMC steps. Click a completed row to show it."
+              >
+                Gen
+              </th>
+              <th
+                class="num"
+                title="Tolerance: the largest distance from the target a simulation may have to be accepted."
+              >
+                Tol.
+              </th>
+              <th
+                class="num"
+                title="Acceptance ratio: accepted particles over simulations run. While running, accepted so far out of the particles wanted."
+              >
+                Acc.
+              </th>
+              <th
+                class="num"
+                title="Effective sample size: 1 / Σ w², the number of equally weighted particles the weights are worth."
+              >
+                ESS
+              </th>
+              <th class="num" title="Seconds the generation took.">s</th>
             </tr>
           </thead>
           <tbody>
@@ -1788,6 +1807,11 @@ h4 small {
   width: 100%;
   border-collapse: collapse;
   font-size: 0.85rem;
+}
+.gen-table th[title] {
+  cursor: help;
+  text-decoration: underline dotted;
+  text-underline-offset: 0.2em;
 }
 .gen-table th,
 .gen-table td {
