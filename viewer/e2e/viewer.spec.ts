@@ -1,4 +1,4 @@
-import { expect, test, type Locator } from "@playwright/test";
+import { expect, test, type Locator, type Page } from "@playwright/test";
 import { readFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 import { strFromU8, unzipSync } from "fflate";
@@ -6,6 +6,59 @@ import { strFromU8, unzipSync } from "fflate";
 const fixture = fileURLToPath(
   new URL("./fixtures/renewal.jsonl", import.meta.url),
 );
+
+// A finished one-generation run with the given parameters, loaded through
+// the file input.
+async function loadSyntheticRun(
+  page: Page,
+  names: string[],
+  count: number,
+  params: (i: number) => number[],
+) {
+  const particles = Array.from({ length: count }, (_, i) => ({
+    params: params(i),
+    weight: 1 / count,
+    distance: 0,
+    seed: String(i),
+  }));
+  const stats = {
+    tolerance: null,
+    accepted: count,
+    attempts: count,
+    acceptance_ratio: 1,
+    ess: count,
+    perplexity: count,
+    duration_seconds: 0,
+  };
+  const lines = [
+    {
+      type: "run_started",
+      version: 1,
+      id: "pairs",
+      n_particles: count,
+      n_generations: 1,
+      quantiles: null,
+      params: names.map((name) => ({ name, kind: "real" })),
+      observed: null,
+    },
+    { type: "generation_started", generation: 0, tolerance: null },
+    {
+      type: "generation_completed",
+      generation: 0,
+      stats,
+      particles,
+      trajectories: [],
+    },
+    { type: "run_finished", generations: 1 },
+  ];
+  await page.goto("/");
+  await page.getByLabel("Load run.jsonl").setInputFiles({
+    name: "pairs.jsonl",
+    mimeType: "application/jsonl",
+    buffer: Buffer.from(lines.map((l) => JSON.stringify(l)).join("\n")),
+  });
+  await expect(page.getByTestId("status")).toHaveText("Finished");
+}
 
 // The file input is the fallback for browsers without file handles, and the
 // one way to hand the page a file from here, so most tests run without them.
@@ -447,6 +500,12 @@ test.describe("without file handles", () => {
 
     // Two parameters make one pair; choosing the other one swaps the axes.
     const section = page.getByTestId("correlations");
+    // The table is the default view.
+    await expect(section.locator("tbody tr")).toHaveCount(1);
+    await expect(section.locator("tbody tr")).toContainText(
+      "r0 ~ initial_infections",
+    );
+    await section.getByRole("button", { name: "Plots" }).click();
     await expect(section.locator(".line-chart-wrapper")).toHaveCount(1);
     await expect(section).toContainText(
       /r0 ~ initial_infections: r = -?\d\.\d\d \(Gen 4\)/,
@@ -459,58 +518,21 @@ test.describe("without file handles", () => {
     await expect(section).toContainText("initial_infections ~ r0: r =");
   });
 
-  test("pairwise scatters show one parameter against the others, sorted", async ({
+  test("pairwise scatters show every pair, sorted, or one parameter's", async ({
     page,
   }) => {
     // Three parameters: b follows a exactly, c runs against it loosely.
-    const particles = Array.from({ length: 20 }, (_, i) => ({
-      params: [i, 2 * i, 20 - i + (i % 3) * 4],
-      weight: 1 / 20,
-      distance: 0,
-      seed: String(i),
-    }));
-    const stats = {
-      tolerance: null,
-      accepted: 20,
-      attempts: 20,
-      acceptance_ratio: 1,
-      ess: 20,
-      perplexity: 20,
-      duration_seconds: 0,
-    };
-    const lines = [
-      {
-        type: "run_started",
-        version: 1,
-        id: "pairs",
-        n_particles: 20,
-        n_generations: 1,
-        quantiles: null,
-        params: ["a", "b", "c"].map((name) => ({ name, kind: "real" })),
-        observed: null,
-      },
-      { type: "generation_started", generation: 0, tolerance: null },
-      {
-        type: "generation_completed",
-        generation: 0,
-        stats,
-        particles,
-        trajectories: [],
-      },
-      { type: "run_finished", generations: 1 },
-    ];
-    await page.goto("/");
-    await page.getByLabel("Load run.jsonl").setInputFiles({
-      name: "pairs.jsonl",
-      mimeType: "application/jsonl",
-      buffer: Buffer.from(lines.map((l) => JSON.stringify(l)).join("\n")),
-    });
-    await expect(page.getByTestId("status")).toHaveText("Finished");
+    await loadSyntheticRun(page, ["a", "b", "c"], 20, (i) => [
+      i,
+      2 * i,
+      20 - i + (i % 3) * 4,
+    ]);
 
     const section = page.getByTestId("correlations");
     const charts = section.locator(".line-chart-wrapper");
-    // The first parameter against the other two, strongest first.
-    await expect(charts).toHaveCount(2);
+    await section.getByRole("button", { name: "Plots" }).click();
+    // Every pair, strongest first.
+    await expect(charts).toHaveCount(3);
     await expect(charts.first()).toContainText("a ~ b: r = 1.00");
 
     await section.getByRole("combobox", { name: "Sort" }).click();
@@ -523,6 +545,63 @@ test.describe("without file handles", () => {
     await expect(section).toContainText("c ~ a");
     await expect(section).toContainText("c ~ b");
     await expect(section).not.toContainText("a ~ b");
+  });
+
+  test("correlations rank every pair before paging, as plots or a table", async ({
+    page,
+  }) => {
+    // Six parameters make 15 pairs; only the last two are tied exactly, so
+    // a sort applied per page would not put them first.
+    let state = 7;
+    const random = () => {
+      state = (state * 48271) % 2147483647;
+      return state / 2147483647;
+    };
+    await loadSyntheticRun(
+      page,
+      ["p0", "p1", "p2", "p3", "p4", "p5"],
+      40,
+      () => {
+        const p4 = random();
+        return [random(), random(), random(), random(), p4, 3 * p4 + 1];
+      },
+    );
+
+    const section = page.getByTestId("correlations");
+    const charts = section.locator(".line-chart-wrapper");
+    const status = section.getByTestId("page-status");
+    const next = section.getByRole("button", { name: "Next page" });
+
+    // The table, the default, holds all 15 on one page, strongest first.
+    const rows = section.locator("tbody tr");
+    await expect(rows).toHaveCount(15);
+    await expect(status).toHaveCount(0);
+    await expect(rows.first()).toContainText("p4 ~ p5");
+    await expect(rows.first()).toContainText("1.00");
+
+    // A row opens the plot page its pair is on.
+    const eighth = (await rows.nth(7).locator("button").textContent())!.trim();
+    await rows.nth(7).locator("button").click();
+    await expect(status).toContainText("Page 2 of 3");
+    await expect(section).toContainText(`${eighth}: r =`);
+
+    // Plots page six at a time, in the same order.
+    await section.getByRole("button", { name: "Previous page" }).click();
+    await expect(status).toContainText("Page 1 of 3");
+    await expect(status).toContainText("15 pairs");
+    await expect(charts).toHaveCount(6);
+    await expect(charts.first()).toContainText("p4 ~ p5: r = 1.00");
+    await next.click();
+    await expect(status).toContainText("Page 2 of 3");
+    await expect(charts).toHaveCount(6);
+    await next.click();
+    await expect(charts).toHaveCount(3);
+    await expect(next).toBeDisabled();
+
+    await section.getByRole("button", { name: "Table" }).click();
+    await section.getByRole("combobox", { name: "Sort" }).click();
+    await page.getByRole("option", { name: "By name" }).click();
+    await expect(rows.first()).toContainText("p0 ~ p1");
   });
 
   test("dragging across a chart zooms it, and the reset button undoes it", async ({

@@ -1,5 +1,13 @@
 <script setup lang="ts">
-import { computed, onMounted, onScopeDispose, reactive, ref, watch } from "vue";
+import {
+  computed,
+  nextTick,
+  onMounted,
+  onScopeDispose,
+  reactive,
+  ref,
+  watch,
+} from "vue";
 import {
   Button,
   Hint,
@@ -10,6 +18,16 @@ import {
 } from "cfasim-ui/components";
 import { BarChart, DataTable, LineChart } from "cfasim-ui/charts";
 import ChartTip from "./ChartTip.vue";
+import CorrelationTable, { type CorrelationRow } from "./CorrelationTable.vue";
+import Pager from "./Pager.vue";
+import {
+  correlationPairs,
+  pageCount,
+  pageOf,
+  sortPairs,
+  type CorrelationPair,
+  type CorrelationSort,
+} from "./correlations";
 import PosteriorTable, { type PosteriorRow } from "./PosteriorTable.vue";
 import { columnsToCsv, fileStem } from "./csv";
 import { downloadBytes, exportOutputs } from "./export";
@@ -49,7 +67,6 @@ import {
   type ParamSummary,
   quantileBands,
   spreadAt,
-  weightedCorrelation,
   weightedHistogram,
   weightedKde,
 } from "./stats";
@@ -97,7 +114,7 @@ function reset() {
   selectedGeneration.value = null;
   allGenerations.value = false;
   tab.value = "calibration";
-  correlationParam.value = undefined;
+  correlationParam.value = ALL_PARAMS;
 }
 
 function onLines(lines: string[]) {
@@ -1011,34 +1028,105 @@ function trajectorySubtitle(g: TrajectoryView): string {
 // Dots drawn per cloud; the correlation always uses every particle.
 const MAX_SCATTER_DOTS = 500;
 
-// The parameter on every panel's x axis; unset means the first one.
-const correlationParam = ref<string | undefined>(undefined);
-const correlationSort = ref("strongest");
+// The parameter every pair must include, on the x axis, or ALL_PARAMS for
+// every pair.
+const ALL_PARAMS = "*";
+const correlationParam = ref<string>(ALL_PARAMS);
+const correlationSort = ref<CorrelationSort>("strongest");
+const correlationView = ref<"plots" | "table">("table");
+const correlationPage = ref(0);
 
 const CORRELATION_SORTS = [
   { value: "strongest", label: "Strongest |r| first" },
   { value: "weakest", label: "Weakest |r| first" },
   { value: "name", label: "By name" },
 ];
+const CORRELATION_VIEWS = [
+  { value: "plots", label: "Plots" },
+  { value: "table", label: "Table" },
+];
+const CORRELATION_PAGE_SIZES = { plots: 6, table: 20 };
 
-const correlationParamOptions = computed(() =>
-  run.params.map((p) => ({ value: p.name, label: p.name })),
-);
+const correlationParamOptions = computed(() => [
+  { value: ALL_PARAMS, label: "All parameters" },
+  ...run.params.map((p) => ({ value: p.name, label: p.name })),
+]);
 
-// Index of the chosen parameter, falling back to the first.
-const correlationIndex = computed(() =>
-  Math.max(
-    0,
-    run.params.findIndex((p) => p.name === correlationParam.value),
+// Every pair (or the chosen parameter's) for the shown generation, ranked.
+// Correlations are cheap; only the shown page of plots is drawn.
+const correlationPairList = computed(() => {
+  const g = shownGeneration.value;
+  if (!g || run.params.length < 2) return [];
+  const first = completed.value[0];
+  const focus = run.params.findIndex((p) => p.name === correlationParam.value);
+  const pairs = correlationPairs(
+    run.params.length,
+    g.particles,
+    first && first !== g ? first.particles : null,
+    focus >= 0 ? focus : null,
+  );
+  return sortPairs(
+    pairs,
+    correlationSort.value,
+    run.params.map((p) => p.name),
+  );
+});
+
+// What the grey correlations come from; null when the shown generation is
+// generation 0 itself.
+const correlationReference = computed(() => {
+  const first = completed.value[0];
+  if (!first || first === shownGeneration.value) return null;
+  return first.tolerance === null ? "prior" : generationLabel(first);
+});
+
+const correlationPages = computed(() =>
+  pageCount(
+    correlationPairList.value.length,
+    CORRELATION_PAGE_SIZES[correlationView.value],
   ),
 );
 
-const correlationChoice = computed({
-  get: () => run.params[correlationIndex.value]?.name,
-  set: (value: string | undefined) => {
-    correlationParam.value = value;
-  },
+watch(
+  [correlationParam, correlationSort, correlationView, shownGeneration],
+  () => (correlationPage.value = 0),
+);
+watch(correlationPages, (pages) => {
+  if (correlationPage.value >= pages) correlationPage.value = pages - 1;
 });
+
+function pairKey(pair: CorrelationPair): string {
+  return `${run.params[pair.x]!.name}~${run.params[pair.y]!.name}`;
+}
+
+function pairLabel(pair: CorrelationPair): string {
+  return `${run.params[pair.x]!.name} ~ ${run.params[pair.y]!.name}`;
+}
+
+const correlationRows = computed((): CorrelationRow[] =>
+  pageOf(
+    correlationPairList.value,
+    correlationPage.value,
+    CORRELATION_PAGE_SIZES.table,
+  ).map((pair) => ({
+    key: pairKey(pair),
+    label: pairLabel(pair),
+    r: pair.r,
+    referenceR: pair.referenceR,
+  })),
+);
+
+// A table row opens the plot page that pair is on.
+function showPairPlot(key: string) {
+  const index = correlationPairList.value.findIndex((p) => pairKey(p) === key);
+  correlationView.value = "plots";
+  // The view watcher resets the page; set it after.
+  nextTick(() => {
+    correlationPage.value = Math.floor(
+      Math.max(0, index) / CORRELATION_PAGE_SIZES.plots,
+    );
+  });
+}
 
 function everyNth<T>(items: T[], limit: number): T[] {
   if (items.length <= limit) return items;
@@ -1049,14 +1137,13 @@ function everyNth<T>(items: T[], limit: number): T[] {
   );
 }
 
-// The chosen parameter against each of the others for the shown generation,
-// the prior cloud behind it. Only these pairs are built, so a run with many
-// parameters does not draw every combination at once. Each dot is one particle, so a pair is read off the same
-// draw, which the marginal charts cannot show.
+// One scatter per pair on the shown page, the prior cloud behind it. Each
+// dot is one particle, so a pair is read off the same draw, which the
+// marginal charts cannot show.
 const correlationPanels = computed(() => {
   const g = shownGeneration.value;
   const prior = completed.value[0];
-  if (!g || run.params.length < 2) return [];
+  if (!g) return [];
   const scales = paramRanges.value.map((r, i) =>
     axisScale(run.params[i]!.name, Math.max(Math.abs(r.lo), Math.abs(r.hi))),
   );
@@ -1077,51 +1164,33 @@ const correlationPanels = computed(() => {
     };
   };
   const weights = g.particles.map((p) => p.weight);
-  const panels = [];
-  const i = correlationIndex.value;
-  {
-    for (let j = 0; j < run.params.length; j++) {
-      if (j === i) continue;
-      const x = run.params[i]!.name;
-      const y = run.params[j]!.name;
-      const xs = g.particles.map((p) => p.params[i]!);
-      const ys = g.particles.map((p) => p.params[j]!);
-      const correlation = weightedCorrelation(xs, ys, weights);
-      const r = Number.isFinite(correlation) ? correlation.toFixed(2) : "–";
-      panels.push({
-        key: `${x}~${y}`,
-        x,
-        y,
-        xLabel: scales[i]!.label,
-        yLabel: scales[j]!.label,
-        correlation,
-        title: `${x} ~ ${y}: r = ${r} (${generationLabel(g)})`,
-        filename: fileStem(run.id, "correlation", generationLabel(g), x, y),
-        series:
-          prior && g !== prior
-            ? [cloud(prior, i, j), cloud(g, i, j)]
-            : [cloud(g, i, j)],
-        csv: () =>
-          columnsToCsv([
-            { header: x, values: xs },
-            { header: y, values: ys },
-            { header: "weight", values: weights },
-          ]),
-      });
-    }
-  }
-  return panels;
-});
-
-const shownCorrelationPanels = computed(() => {
-  const strength = (r: number) => (Number.isFinite(r) ? Math.abs(r) : 0);
-  const panels = [...correlationPanels.value];
-  if (correlationSort.value === "strongest")
-    panels.sort((a, b) => strength(b.correlation) - strength(a.correlation));
-  else if (correlationSort.value === "weakest")
-    panels.sort((a, b) => strength(a.correlation) - strength(b.correlation));
-  else panels.sort((a, b) => a.key.localeCompare(b.key));
-  return panels;
+  return pageOf(
+    correlationPairList.value,
+    correlationPage.value,
+    CORRELATION_PAGE_SIZES.plots,
+  ).map((pair) => {
+    const { x: i, y: j } = pair;
+    const x = run.params[i]!.name;
+    const y = run.params[j]!.name;
+    const r = Number.isFinite(pair.r) ? pair.r.toFixed(2) : "–";
+    return {
+      key: pairKey(pair),
+      xLabel: scales[i]!.label,
+      yLabel: scales[j]!.label,
+      title: `${x} ~ ${y}: r = ${r} (${generationLabel(g)})`,
+      filename: fileStem(run.id, "correlation", generationLabel(g), x, y),
+      series:
+        prior && g !== prior
+          ? [cloud(prior, i, j), cloud(g, i, j)]
+          : [cloud(g, i, j)],
+      csv: () =>
+        columnsToCsv([
+          { header: x, values: g.particles.map((p) => p.params[i]!) },
+          { header: y, values: g.particles.map((p) => p.params[j]!) },
+          { header: "weight", values: weights },
+        ]),
+    };
+  });
 });
 
 // Draws every chart title line after the first smaller and at normal weight.
@@ -1969,7 +2038,7 @@ function fmt(x: number, digits = 3): string {
           </div>
         </section>
 
-        <section v-if="correlationPanels.length" data-testid="correlations">
+        <section v-if="correlationPairList.length" data-testid="correlations">
           <h2>
             Parameter correlations
             <small v-if="shownGeneration"
@@ -1977,10 +2046,10 @@ function fmt(x: number, digits = 3): string {
             >
           </h2>
           <p class="muted">
-            The chosen parameter against each of the others. One dot per
-            particle, the prior behind in grey. A tilted cloud means the data
-            pins the two parameters' combination but not either one alone, which
-            the marginal charts cannot show.
+            Every pair of parameters, or the chosen one's, ranked across all
+            pairs before paging. One dot per particle, the prior behind in grey.
+            A tilted cloud means the data pins the two parameters' combination
+            but not either one alone, which the marginal charts cannot show.
             <template
               v-if="
                 shownGeneration &&
@@ -1993,21 +2062,33 @@ function fmt(x: number, digits = 3): string {
             </template>
           </p>
           <div class="correlation-controls">
+            <ToggleGroup
+              v-model="correlationView"
+              :options="CORRELATION_VIEWS"
+              label="View"
+            />
             <SelectBox
-              v-model="correlationChoice"
+              v-model="correlationParam"
               :options="correlationParamOptions"
               label="Parameter"
             />
             <SelectBox
-              v-if="correlationPanels.length > 1"
+              v-if="correlationPairList.length > 1"
               v-model="correlationSort"
               :options="CORRELATION_SORTS"
               label="Sort"
             />
           </div>
-          <div class="grid">
+          <CorrelationTable
+            v-if="correlationView === 'table'"
+            :rows="correlationRows"
+            :reference="correlationReference"
+            :color="palette.posterior"
+            @select="showPairPlot"
+          />
+          <div v-else class="grid">
             <div
-              v-for="panel in shownCorrelationPanels"
+              v-for="panel in correlationPanels"
               :key="panel.key"
               class="cell"
             >
@@ -2024,6 +2105,12 @@ function fmt(x: number, digits = 3): string {
               />
             </div>
           </div>
+          <Pager
+            v-model="correlationPage"
+            :pages="correlationPages"
+            :total="correlationPairList.length"
+            noun="pairs"
+          />
         </section>
       </div>
 
