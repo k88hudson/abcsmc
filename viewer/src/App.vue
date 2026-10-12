@@ -6,6 +6,7 @@ import {
   SelectBox,
   SidebarLayout,
   Toggle,
+  ToggleGroup,
 } from "cfasim-ui/components";
 import { BarChart, DataTable, LineChart } from "cfasim-ui/charts";
 import ChartTip from "./ChartTip.vue";
@@ -64,6 +65,13 @@ const showObserved = ref(true);
 const allGenerations = ref(false);
 const tab = ref("calibration");
 const facet = ref(false);
+// The trajectories section draws the logged trajectories themselves or the
+// credible intervals they give.
+const trajectoryMode = ref("trajectories");
+const TRAJECTORY_MODES = [
+  { value: "trajectories", label: "Trajectories" },
+  { value: "intervals", label: "Credible intervals" },
+];
 const main = ref<HTMLElement | null>(null);
 const exporting = ref(false);
 const yScaleType = computed(() => (logScale.value ? "log" : "linear"));
@@ -345,12 +353,17 @@ const liveFraction = computed(() => {
   return Math.min(1, g.liveAccepted / run.nParticles);
 });
 
-// Median and central 50% and 90% bands of each projection, with the observed
-// series on top so the fitted window and the projected part read together.
-const projectionCharts = computed(() =>
-  run.projections.map((projection) => {
+// Weighted median and central 50% and 90% bands of `trajectories`, with the
+// observed series on top. Shared by the projections and the credible-interval
+// view of the trajectories.
+function bandChart(
+  trajectories: { weight: number; values: (number | null)[] }[],
+  title: string,
+  filename: string,
+) {
+  {
     const { x, bands } = quantileBands(
-      projection.trajectories,
+      trajectories,
       [0.05, 0.25, 0.5, 0.75, 0.95],
     );
     const series: {
@@ -381,9 +394,8 @@ const projectionCharts = computed(() =>
     }
     const observed = run.observed;
     return {
-      label: projection.label,
-      title: `Projection: ${projection.label} (${projection.trajectories.length} particles)`,
-      filename: fileStem(run.id, "projection", projection.label),
+      title,
+      filename,
       csv: () =>
         columnsToCsv([
           { header: "index", values: x },
@@ -414,8 +426,47 @@ const projectionCharts = computed(() =>
         },
       ],
     };
-  }),
+  }
+}
+
+// One band chart per projection, so the fitted window and the projected
+// part read together.
+const projectionCharts = computed(() =>
+  run.projections.map((projection) => ({
+    label: projection.label,
+    ...bandChart(
+      projection.trajectories,
+      `Projection: ${projection.label} (${projection.trajectories.length} particles)`,
+      fileStem(run.id, "projection", projection.label),
+    ),
+  })),
 );
+
+// The credible intervals of each generation in view, weighted by the
+// trajectories' particles: one chart per generation, never pooled.
+const intervalCharts = computed(() => {
+  const gens = allGenerations.value
+    ? completed.value
+    : shownGeneration.value
+      ? [shownGeneration.value]
+      : [];
+  return gens
+    .filter((g) => g.trajectories.length > 0)
+    .map((g) => {
+      const label = generationLabel(g);
+      return {
+        key: g.generation,
+        ...bandChart(
+          g.trajectories.map((t) => ({
+            weight: g.particles[t.particle]?.weight ?? 0,
+            values: t.values,
+          })),
+          `Credible intervals: ${label}, ${g.trajectories.length} of ${g.particles.length} accepted particles`,
+          fileStem(run.id, "intervals", label),
+        ),
+      };
+    });
+});
 
 // The run's markers as every series chart draws them: fixed vertical lines
 // in the theme's marker colour, labelled where the log labels them.
@@ -1359,6 +1410,12 @@ function fmt(x: number, digits = 3): string {
             <small>{{ trajectorySubtitle(trajectoryView) }}</small>
           </h2>
           <div class="chart-controls">
+            <ToggleGroup
+              v-model="trajectoryMode"
+              :options="TRAJECTORY_MODES"
+              label="View"
+              hide-label
+            />
             <SelectBox
               v-model="generationChoice"
               :options="generationOptions"
@@ -1367,15 +1424,51 @@ function fmt(x: number, digits = 3): string {
               class="generation-select"
             />
             <Toggle
-              v-if="allGenerations"
+              v-if="allGenerations && trajectoryMode === 'trajectories'"
               v-model="facet"
               label="Facet by generation"
             />
           </div>
-          <p class="muted legend-hint">
+          <p v-if="trajectoryMode === 'intervals'" class="muted legend-hint">
+            Weighted median and central 50% and 90% bands of the logged accepted
+            trajectories, one chart per generation.
+          </p>
+          <p v-else class="muted legend-hint">
             Click a legend item to hide or show it.
           </p>
           <div
+            v-if="trajectoryMode === 'intervals'"
+            :class="{ grid: intervalCharts.length > 1 }"
+            data-testid="intervals"
+          >
+            <div v-for="chart in intervalCharts" :key="chart.key" class="cell">
+              <LineChart
+                zoom
+                :series="chart.series"
+                :areas="chart.areas"
+                :markers="chartMarkers"
+                :height="intervalCharts.length > 1 ? 300 : 260"
+                x-label="Index"
+                y-label="Value"
+                :y-scale-type="yScaleType"
+                :filename="chart.filename"
+                :data-export-name="chart.filename"
+                :title="chart.title"
+                :csv="chart.csv"
+                tooltip-trigger="hover"
+              >
+                <template #tooltip="t">
+                  <ChartTip
+                    :heading="`Index ${t.index}`"
+                    :values="withinObserved(t.values, t.index)"
+                    :labels="chart.series.map((s) => s.legend)"
+                  />
+                </template>
+              </LineChart>
+            </div>
+          </div>
+          <div
+            v-else
             ref="trajectoryChart"
             :class="{ grid: trajectoryCharts.length > 1 }"
           >

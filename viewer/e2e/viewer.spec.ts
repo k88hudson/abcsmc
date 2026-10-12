@@ -260,6 +260,40 @@ test.describe("without file handles", () => {
     ).toHaveCSS("text-decoration-line", "line-through");
   });
 
+  test("the view switches between trajectories and credible intervals", async ({
+    page,
+  }) => {
+    await page.goto("/");
+    await page.getByLabel("Load run.jsonl").setInputFiles(fixture);
+    await expect(page.getByTestId("status")).toHaveText("Finished");
+
+    const section = page.getByTestId("trajectories");
+    const view = section.getByRole("group", { name: "View" });
+    await view.getByRole("button", { name: "Credible intervals" }).click();
+    const intervals = page.getByTestId("intervals");
+    await expect(intervals.locator(".line-chart-wrapper")).toHaveCount(1);
+    await expect(intervals).toContainText(
+      "Credible intervals: Gen 4, 20 of 100 accepted particles",
+    );
+    await expect(
+      intervals.locator("svg text").getByText("Median", { exact: true }),
+    ).toBeVisible();
+    await expect(section.locator("[data-trajectory-chart]")).toHaveCount(0);
+    await expect(section.getByText("Facet by generation")).toHaveCount(0);
+
+    // Every generation gets its own chart; they are never pooled.
+    await section.getByRole("combobox", { name: "Generation" }).click();
+    await page.getByRole("option", { name: "All generations" }).click();
+    await expect(intervals.locator(".line-chart-wrapper")).toHaveCount(5);
+    await expect(
+      intervals.locator(".line-chart-wrapper").first(),
+    ).toContainText("Credible intervals: Prior");
+
+    await view.getByRole("button", { name: "Trajectories" }).click();
+    await expect(section.locator("[data-trajectory-chart]")).toHaveCount(1);
+    await expect(intervals).toHaveCount(0);
+  });
+
   test("the generation selector shows one generation or all of them", async ({
     page,
   }) => {
