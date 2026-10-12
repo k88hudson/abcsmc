@@ -133,6 +133,10 @@ test.describe("without file handles", () => {
     await expect(page.getByTestId("projections")).toContainText(
       "200 particles",
     );
+    // The held-out data is drawn on every projection chart.
+    await expect(
+      page.getByTestId("projections").locator(".line-chart-wrapper").first(),
+    ).toContainText("Held-out data");
     await expect(page.getByTestId("trajectories")).toBeHidden();
     await page.getByRole("tab", { name: "Calibration" }).click();
     // Per generation shows the selected generation alone until asked for all.

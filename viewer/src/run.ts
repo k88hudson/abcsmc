@@ -87,6 +87,15 @@ export interface Projection {
   trajectories: ProjectedTrajectory[];
 }
 
+// Data to set the projections against that the run was not fitted to, such
+// as a held-out stretch of the observed series, appended after the run. Each
+// series is drawn on the projections of its name. A later comparison with
+// the same label replaces the earlier one.
+export interface Comparison {
+  label: string;
+  series: Series[];
+}
+
 // A position on the series' axis that the charts mark with a vertical line:
 // a day the distance scores on, when a change takes effect. Logged with the
 // run, and added to by `markers` events appended after it.
@@ -123,6 +132,7 @@ export interface RunState {
   ranges: TargetRange[];
   generations: Generation[];
   projections: Projection[];
+  comparisons: Comparison[];
   status: "empty" | "running" | "finished";
   lines: number;
   badLines: number;
@@ -173,6 +183,7 @@ export type RunEvent =
       label: string;
       trajectories: LoggedTrajectory<{ weight: number }>[];
     }
+  | { type: "comparison"; label: string; series: Series[] }
   | { type: "markers"; markers: Marker[] }
   | { type: "ranges"; ranges: TargetRange[] };
 
@@ -238,6 +249,7 @@ export function emptyRun(): RunState {
     markers: [],
     ranges: [],
     projections: [],
+    comparisons: [],
     status: "empty",
     lines: 0,
     badLines: 0,
@@ -362,6 +374,15 @@ export function applyEvent(state: RunState, event: RunEvent): RunState {
       );
       if (existing >= 0) state.projections[existing] = projection;
       else state.projections.push(projection);
+      break;
+    }
+    case "comparison": {
+      const comparison = { label: event.label, series: event.series };
+      const existing = state.comparisons.findIndex(
+        (c) => c.label === event.label,
+      );
+      if (existing >= 0) state.comparisons[existing] = comparison;
+      else state.comparisons.push(comparison);
       break;
     }
   }

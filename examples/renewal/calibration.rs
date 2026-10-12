@@ -6,8 +6,8 @@
 use std::path::Path;
 
 use abcsmc::{
-    CalibrationModel, Distance, Generation, JsonlObserver, Marker, Particle, Priors, Series,
-    StdoutObserver, TargetRange, define_priors, discrete_uniform_prior, distance,
+    CalibrationModel, Comparison, Distance, Generation, JsonlObserver, Marker, Particle, Priors,
+    Series, StdoutObserver, TargetRange, define_priors, discrete_uniform_prior, distance,
     exponential_prior, run_quantiles_with,
 };
 use rand::{SeedableRng, rngs::StdRng};
@@ -236,6 +236,29 @@ pub fn fit() {
     );
     if let Some(posterior) = generations.last() {
         projection::write_scenarios(&model, posterior, FITTED_DAYS, &log_path);
+    }
+    held_out(&incidence, FITTED_DAYS)
+        .append_to(&log_path)
+        .unwrap();
+}
+
+/// The observations after the fitted window, which the fit never saw, for the
+/// viewer to set the projections against. Fitted days are left out (`NaN`),
+/// so only the held-out part is drawn.
+fn held_out(incidence: &[u64], fitted_days: usize) -> Comparison {
+    let after_fit = |values: Vec<f64>| {
+        values
+            .into_iter()
+            .enumerate()
+            .map(|(day, x)| if day < fitted_days { f64::NAN } else { x })
+            .collect()
+    };
+    Comparison {
+        label: "Held-out data".into(),
+        series: vec![
+            Series::named(DAILY, after_fit(as_f64s(incidence))),
+            Series::named(CUMULATIVE, after_fit(as_f64s(&cumulative(incidence)))),
+        ],
     }
 }
 

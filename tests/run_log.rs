@@ -2,7 +2,7 @@
 #![cfg(feature = "serde")]
 
 use abcsmc::{
-    CalibrationModel, Draw as _, IntPrior, JsonlObserver, Marker, Posterior, Priors,
+    CalibrationModel, Comparison, Draw as _, IntPrior, JsonlObserver, Marker, Posterior, Priors,
     ProjectedTrajectory, Projection, RealPrior, RunLog, Series, TargetRange, append_markers,
     append_ranges, define_priors, distance_to, run_quantiles_with,
 };
@@ -165,6 +165,35 @@ fn projections_append_and_the_latest_label_wins() {
             log.projections[1].trajectories[1],
             replacement.trajectories[1]
         );
+    });
+}
+
+#[test]
+fn comparisons_append_and_the_latest_label_wins() {
+    with_run("comparison", |path, _| {
+        let held_out = Comparison {
+            label: "held out".into(),
+            series: vec![Series::unnamed(vec![f64::NAN, 12.0, 13.0])],
+        };
+        let other = Comparison {
+            label: "surveillance \"v2\"".into(),
+            series: vec![Series::named("cases", vec![1.0])],
+        };
+        let replacement = Comparison {
+            label: "held out".into(),
+            series: vec![Series::unnamed(vec![11.0, 12.5])],
+        };
+        held_out.append_to(path).unwrap();
+        other.append_to(path).unwrap();
+
+        let log = RunLog::read(path).unwrap();
+        assert!(log.comparisons[0].series[0].values[0].is_nan());
+        assert_eq!(log.comparisons[0].series[0].values[1..], [12.0, 13.0]);
+
+        replacement.append_to(path).unwrap();
+        let log = RunLog::read(path).unwrap();
+        assert!(log.finished);
+        assert_eq!(log.comparisons, vec![other, replacement]);
     });
 }
 

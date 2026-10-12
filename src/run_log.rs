@@ -1,5 +1,5 @@
 //! Working with a finished (or still running) `run.jsonl` after the fact:
-//! appending projections to it, and, with the `serde` feature, reading its
+//! appending projections and comparison data to it, and, with the `serde` feature, reading its
 //! particles back so a projection does not have to rerun the calibration.
 
 use std::fs::OpenOptions;
@@ -65,6 +65,34 @@ impl Projection {
     }
 }
 
+/// Data to set projections against that the run was not fitted to, such as
+/// the part of the observed series held out of the fit, stored in the run log
+/// as a `comparison` event:
+/// `{"type":"comparison","label":...,"series":[{"name":...,"values":[...]}]}`.
+///
+/// Values are on the observed series' axis and start at the same index, so a
+/// longer series runs past the fitted window; a viewer draws each series on
+/// the projections of its name. Missing values are written as `null`. A
+/// later comparison with the same label replaces the earlier one.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Comparison {
+    pub label: String,
+    pub series: Vec<Series>,
+}
+
+impl Comparison {
+    /// Appends this comparison to the run log at `path` as one line.
+    pub fn append_to(&self, path: impl AsRef<Path>) -> io::Result<()> {
+        let mut line = String::from(r#"{"type":"comparison","label":"#);
+        push_str(&mut line, &self.label);
+        line.push_str(r#","series":"#);
+        push_series(&mut line, &self.series);
+        line.push('}');
+        let mut file = OpenOptions::new().append(true).open(path)?;
+        writeln!(file, "{line}")
+    }
+}
+
 #[cfg(feature = "serde")]
 pub use reader::*;
 
@@ -76,7 +104,7 @@ mod reader {
 
     use serde::Deserialize;
 
-    use super::{ProjectedTrajectory, Projection};
+    use super::{Comparison, ProjectedTrajectory, Projection};
     use crate::marker::merge_markers;
     use crate::range::merge_ranges;
     use crate::{
@@ -111,6 +139,8 @@ mod reader {
         /// after finishing is unfinished until it ends again.
         pub finished: bool,
         pub projections: Vec<Projection>,
+        /// Data to set the projections against, latest label winning.
+        pub comparisons: Vec<Comparison>,
     }
 
     #[derive(Clone, Debug)]
@@ -310,6 +340,10 @@ mod reader {
             label: String,
             trajectories: Vec<TrajectorySpec>,
         },
+        Comparison {
+            label: String,
+            series: Vec<SeriesSpec>,
+        },
         #[serde(other)]
         Other,
     }
@@ -375,6 +409,7 @@ mod reader {
                             generations: Vec::new(),
                             finished: false,
                             projections: Vec::new(),
+                            comparisons: Vec::new(),
                         });
                     }
                     Event::Other => {}
@@ -438,6 +473,13 @@ mod reader {
                                             },
                                         })
                                         .collect(),
+                                });
+                            }
+                            Event::Comparison { label, series } => {
+                                log.comparisons.retain(|c| c.label != label);
+                                log.comparisons.push(Comparison {
+                                    label,
+                                    series: series.into_iter().map(Series::from).collect(),
                                 });
                             }
                             Event::RunStarted { .. } | Event::Other => unreachable!(),

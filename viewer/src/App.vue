@@ -420,6 +420,7 @@ function bandChart(
   name: string | null,
   title: string,
   filename: string,
+  comparisons: { label: string; values: (number | null)[] }[] = [],
 ) {
   {
     const observed = observedOf(name);
@@ -434,6 +435,10 @@ function bandChart(
       strokeWidth: number;
       dots: boolean;
       legend: string;
+      line?: boolean;
+      dotRadius?: number;
+      dotFill?: string;
+      dotStroke?: string;
     }[] = [
       {
         x,
@@ -444,6 +449,20 @@ function bandChart(
         legend: "Median",
       },
     ];
+    // Hollow points, under the observed series where the two overlap.
+    for (const comparison of comparisons) {
+      series.push({
+        ...finitePoints(comparison.values),
+        color: palette.value.comparison,
+        strokeWidth: 1.5,
+        line: false,
+        dots: true,
+        dotRadius: 3,
+        dotFill: "var(--color-bg-0, #fff)",
+        dotStroke: palette.value.comparison,
+        legend: comparison.label,
+      });
+    }
     if (observed) {
       series.push({
         ...finitePoints(observed),
@@ -459,11 +478,13 @@ function bandChart(
       name,
       bands,
       observed,
+      comparisons,
       intervals: rangeIntervals(name),
       csv: () =>
         columnsToCsv([
           { header: "index", values: x },
           ...(observed ? [{ header: "observed", values: observed }] : []),
+          ...comparisons.map((c) => ({ header: c.label, values: c.values })),
           { header: "q05", values: bands[0]! },
           { header: "q25", values: bands[1]! },
           { header: "median", values: bands[2]! },
@@ -512,6 +533,10 @@ const projectionCharts = computed(() =>
             name,
             `Projection: ${label} (${trajectories.length} particles)`,
             fileStem(run.id, "projection", projection.label, name),
+            run.comparisons.flatMap((c) => {
+              const values = seriesNamed(c.series, name);
+              return values ? [{ label: c.label, values }] : [];
+            }),
           ),
         },
       ];
@@ -1467,6 +1492,7 @@ function bandTipRows(
     name: string | null;
     bands: number[][];
     observed: (number | null)[] | null;
+    comparisons: { label: string; values: (number | null)[] }[];
   },
   index: number,
 ): TipRows {
@@ -1475,6 +1501,10 @@ function bandTipRows(
   const observed = observedAt(chart.observed, index);
   if (observed !== null)
     rows.push("Observed", palette.value.observed, observed);
+  for (const c of chart.comparisons) {
+    const value = observedAt(c.values, index);
+    if (value !== null) rows.push(c.label, palette.value.comparison, value);
+  }
   pushRange(rows, rangeAt(chart.name, index));
   const q = (k: number) => bands[k]![index] ?? NaN;
   rows.push("Median", palette.value.median, q(2));

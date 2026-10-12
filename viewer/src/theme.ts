@@ -17,6 +17,8 @@ export interface ChartPalette {
   marker: string;
   // Target range whiskers.
   range: string;
+  // Data the projections are set against but the run was not fitted to.
+  comparison: string;
 }
 
 const light: ChartPalette = {
@@ -33,6 +35,7 @@ const light: ChartPalette = {
   bandOpacity: [0.15, 0.3],
   marker: "#64748b",
   range: "#c2410c",
+  comparison: "#7c3aed",
 };
 
 const dark: ChartPalette = {
@@ -49,6 +52,7 @@ const dark: ChartPalette = {
   bandOpacity: [0.2, 0.4],
   marker: "#94a3b8",
   range: "#fb923c",
+  comparison: "#a78bfa",
 };
 
 export function chartPalette(isDark: boolean): ChartPalette {

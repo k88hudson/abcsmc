@@ -249,6 +249,28 @@ describe("projections", () => {
   });
 });
 
+describe("comparisons", () => {
+  it("are kept after the run finishes and replaced by label", () => {
+    const s = emptyRun();
+    applyLine(s, started);
+    applyLine(s, JSON.stringify({ type: "run_finished", generations: 0 }));
+    const comparison = (label: string, value: number) =>
+      JSON.stringify({
+        type: "comparison",
+        label,
+        series: [{ name: null, values: [null, value] }],
+      });
+    applyLine(s, comparison("held out", 1));
+    applyLine(s, comparison("revised", 2));
+    applyLine(s, comparison("held out", 3));
+    expect(s.status).toBe("finished");
+    expect(s.comparisons).toEqual([
+      { label: "held out", series: [{ name: null, values: [null, 3] }] },
+      { label: "revised", series: [{ name: null, values: [null, 2] }] },
+    ]);
+  });
+});
+
 describe("series", () => {
   const cases = { name: "cases", values: [1, 2] };
   const deaths = { name: "deaths", values: [0, 1] };
