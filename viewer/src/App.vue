@@ -10,8 +10,9 @@ import {
 } from "cfasim-ui/components";
 import { BarChart, DataTable, LineChart } from "cfasim-ui/charts";
 import ChartTip from "./ChartTip.vue";
+import PosteriorTable, { type PosteriorRow } from "./PosteriorTable.vue";
 import { columnsToCsv, fileStem } from "./csv";
-import { downloadBytes, exportOutputs, SUMMARY_COLUMNS } from "./export";
+import { downloadBytes, exportOutputs } from "./export";
 import {
   applyLine,
   completedGenerations,
@@ -44,6 +45,8 @@ import {
   finitePoints,
   normalizedWeights,
   parameterSummaries,
+  weightedSummary,
+  type ParamSummary,
   quantileBands,
   spreadAt,
   weightedCorrelation,
@@ -1121,10 +1124,50 @@ const shownCorrelationPanels = computed(() => {
   return panels;
 });
 
+// Draws every chart title line after the first smaller and at normal weight.
+// The chart styles the whole title alike, and both exports keep attributes
+// but not page CSS, so attributes are set on the lines as they change.
+const SUBTITLE = { "font-weight": "normal", "font-size": "12" };
+const titleObservers = new WeakMap<HTMLElement, MutationObserver>();
+function plainTitleLines(el: HTMLElement) {
+  for (const text of el.querySelectorAll("svg text")) {
+    const lines = text.querySelectorAll(":scope > tspan");
+    lines.forEach((line, i) => {
+      if (i === 0) return;
+      for (const [attr, value] of Object.entries(SUBTITLE))
+        if (line.getAttribute(attr) !== value) line.setAttribute(attr, value);
+    });
+  }
+}
+const vPlainSubtitle = {
+  mounted(el: HTMLElement) {
+    plainTitleLines(el);
+    const observer = new MutationObserver(() => plainTitleLines(el));
+    observer.observe(el, { childList: true, subtree: true });
+    titleObservers.set(el, observer);
+  },
+  unmounted(el: HTMLElement) {
+    titleObservers.get(el)?.disconnect();
+  },
+};
+
+// A generation's summary of one parameter, as two title lines.
+function posteriorLines(g: Generation, i: number): string {
+  const s = weightedSummary(
+    g.particles.map((p) => p.params[i]!),
+    g.particles.map((p) => p.weight),
+  );
+  return (
+    `\nmedian ${fmt(s.median)}, mean ${fmt(s.mean)}, SD ${fmt(s.sd)}` +
+    `\n90% ${fmt(s.q05)} – ${fmt(s.q95)}, 50% ${fmt(s.q25)} – ${fmt(s.q75)}`
+  );
+}
+
 const overlays = computed(() => {
   const gens = completed.value;
   const n = gens.length;
   return run.params.map((param, i) => {
+    const title = `Posterior of ${param.name} across generations`;
     if (param.kind === "real") {
       const r = paramRanges.value[i]!;
       const series = gens.map((g, k) => {
@@ -1150,7 +1193,7 @@ const overlays = computed(() => {
         kind: param.kind,
         series,
         categories: [] as string[],
-        title: `Posterior of ${param.name} across generations`,
+        title,
         filename: fileStem(run.id, "posterior", param.name),
         csv: () =>
           columnsToCsv([
@@ -1176,7 +1219,7 @@ const overlays = computed(() => {
       kind: param.kind,
       series,
       categories,
-      title: `Posterior of ${param.name} across generations`,
+      title,
       filename: fileStem(run.id, "posterior", param.name),
       csv: () =>
         columnsToCsv([
@@ -1204,47 +1247,36 @@ const priorsTable = computed(() => {
   };
 });
 
-const SUMMARY_LABELS: Record<(typeof SUMMARY_COLUMNS)[number], string> = {
-  mean: "Mean",
-  sd: "SD",
-  q05: "5%",
-  q25: "25%",
-  median: "Median",
-  q75: "75%",
-  q95: "95%",
-};
-
 // Weighted summary of every parameter in the shown generation.
 const summaryTable = computed(() => {
   const g = shownGeneration.value;
   if (!g) return null;
   const summaries = parameterSummaries(run.params.length, g.particles);
-  const names = run.params.map((p) => p.name);
-  const data: Record<string, (string | number)[]> = { parameter: names };
-  for (const key of SUMMARY_COLUMNS) data[key] = summaries.map((s) => s[key]);
+  // Shown beside the posterior's spread: generation 0 is a sample of the
+  // prior when it ran at infinite tolerance, and otherwise the first filtered
+  // one.
+  const first = completed.value[0]!;
+  const reference = first.tolerance === null ? "prior" : generationLabel(first);
+  const base = parameterSummaries(run.params.length, first.particles);
+  const range = (lo: number, hi: number) => `${fmt(lo)} – ${fmt(hi)}`;
+  const shown = (x: ParamSummary) => [
+    fmt(x.mean),
+    fmt(x.sd),
+    fmt(x.median),
+    range(x.q05, x.q95),
+    range(x.q25, x.q75),
+  ];
   return {
     label: generationLabel(g),
-    data,
-    columnConfig: {
-      parameter: { label: "Parameter" },
-      ...Object.fromEntries(
-        SUMMARY_COLUMNS.map((key) => [
-          key,
-          {
-            label: SUMMARY_LABELS[key],
-            align: "right" as const,
-            width: 72,
-            format: (v: string | number | boolean) => fmt(Number(v)),
-          },
-        ]),
-      ),
-    },
-    filename: fileStem(run.id, "posteriors", generationLabel(g)),
-    // Full precision, unlike the rounded cells.
-    csv: () =>
-      columnsToCsv(
-        Object.entries(data).map(([header, values]) => ({ header, values })),
-      ),
+    reference,
+    columns: ["Mean", "SD", "Median", "90% CI", "50% CI"],
+    rows: summaries.map((s, i): PosteriorRow => ({
+      parameter: run.params[i]!.name,
+      cells: shown(s).map((value, k) => ({
+        value,
+        reference: shown(base[i]!)[k]!,
+      })),
+    })),
   };
 });
 
@@ -1283,9 +1315,10 @@ const cells = computed(() => {
           kde:
             param.kind === "real" ? kdeOverlay(i, g.particles, weights) : null,
           title:
-            g === prior
+            (g === prior
               ? `${param.name}: prior${param.prior ? ` ${priorLabel(param.prior)}` : ""}`
-              : `${param.name}: prior and ${generationLabel(g)} posterior`,
+              : `${param.name}: prior and ${generationLabel(g)} posterior`) +
+            posteriorLines(g, i),
           filename: fileStem(run.id, generationLabel(g), param.name),
           csv: () =>
             columnsToCsv([
@@ -1669,14 +1702,14 @@ function fmt(x: number, digits = 3): string {
           <h2>
             Posteriors
             <small
-              >{{ summaryTable.label }}, weighted mean, SD, and quantiles</small
+              >{{ summaryTable.label }}, weighted mean, SD, median, and credible
+              intervals</small
             >
           </h2>
-          <DataTable
-            :data="summaryTable.data"
-            :column-config="summaryTable.columnConfig"
-            :filename="summaryTable.filename"
-            :csv="summaryTable.csv"
+          <PosteriorTable
+            :columns="summaryTable.columns"
+            :rows="summaryTable.rows"
+            :reference="summaryTable.reference"
           />
         </section>
 
@@ -1878,7 +1911,12 @@ function fmt(x: number, digits = 3): string {
                 </small>
               </h4>
               <div class="grid" :style="{ '--cols': Math.min(paramCount, 3) }">
-                <div v-for="p in cell.params" :key="p.name" class="cell">
+                <div
+                  v-for="p in cell.params"
+                  :key="p.name"
+                  v-plain-subtitle
+                  class="cell"
+                >
                   <BarChart
                     zoom
                     :categories="p.categories"
@@ -1910,7 +1948,7 @@ function fmt(x: number, digits = 3): string {
                           ]
                         : []
                     "
-                    :height="170"
+                    :height="220"
                     :filename="p.filename"
                     :data-export-name="p.filename"
                     :title="p.title"

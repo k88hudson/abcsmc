@@ -59,6 +59,10 @@ test.describe("without file handles", () => {
     await expect(posteriors).toContainText("Gen 4");
     await expect(posteriors.locator("tbody tr")).toHaveCount(2);
     await expect(posteriors.locator("tbody tr").first()).toContainText("r0");
+    await expect(posteriors.locator("thead")).toContainText("90% CI");
+    await expect(posteriors.locator("thead")).toContainText("50% CI");
+    await expect(posteriors.locator("thead")).toContainText("(prior in grey)");
+    await expect(posteriors.locator("tbody tr").first()).toContainText(" – ");
     // The priors are on their own tab, not repeated here.
     await expect(posteriors).not.toContainText("Exponential");
     // Priors sit on their own tab.
@@ -82,6 +86,9 @@ test.describe("without file handles", () => {
     const cells = page.getByTestId("cells");
     await expect(cells.locator(".gen-cell")).toHaveCount(1);
     await expect(cells.locator(".gen-cell h4")).toContainText("Gen 4");
+    await expect(cells.locator(".gen-cell")).toContainText(
+      /median .*, mean .*, SD .*90% .* – .*, 50% .* – /,
+    );
     await cells.getByRole("combobox", { name: "Generation" }).click();
     await page.getByRole("option", { name: "All generations" }).click();
     await expect(cells.locator(".gen-cell")).toHaveCount(5);
@@ -212,7 +219,7 @@ test.describe("without file handles", () => {
     await page.getByLabel("Load run.jsonl").setInputFiles(fixture);
     await expect(page.getByTestId("status")).toHaveText("Finished");
 
-    const wrapper = page.getByTestId("posteriors").locator(".TableWrapper");
+    const wrapper = page.getByTestId("posteriors").locator(".scroll");
     const sizes = await wrapper.evaluate((el) => ({
       scroll: el.scrollWidth,
       client: el.clientWidth,
@@ -223,7 +230,7 @@ test.describe("without file handles", () => {
 
     await wrapper.evaluate((el) => (el.scrollLeft = el.scrollWidth));
     await expect(
-      wrapper.getByRole("columnheader", { name: "95%" }),
+      wrapper.getByRole("columnheader", { name: "50% CI" }),
     ).toBeInViewport({ ratio: 1 });
   });
 
