@@ -34,25 +34,31 @@ export function particlesCsv(run: RunState): string {
   ]);
 }
 
-// Long format: one row per value of every logged trajectory.
+// Long format: one row per value of every series of every logged
+// trajectory. `series` is empty for an unnamed series.
 export function trajectoriesCsv(run: RunState): string {
   const generation: number[] = [];
   const particle: number[] = [];
+  const series: string[] = [];
   const index: number[] = [];
   const value: (number | null)[] = [];
   for (const g of completedGenerations(run)) {
     for (const t of g.trajectories) {
-      t.values.forEach((v, i) => {
-        generation.push(g.generation);
-        particle.push(t.particle);
-        index.push(i);
-        value.push(v);
-      });
+      for (const s of t.series) {
+        s.values.forEach((v, i) => {
+          generation.push(g.generation);
+          particle.push(t.particle);
+          series.push(s.name ?? "");
+          index.push(i);
+          value.push(v);
+        });
+      }
     }
   }
   return columnsToCsv([
     { header: "generation", values: generation },
     { header: "particle", values: particle },
+    { header: "series", values: series },
     { header: "index", values: index },
     { header: "value", values: value },
   ]);

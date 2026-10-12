@@ -16,7 +16,7 @@
 //! - [`total_difference`]: compares totals only, ignoring timing.
 //! - [`relative_l1`]: `l1` as a fraction of the observed total.
 
-use crate::Marker;
+use crate::{Marker, Series};
 
 /// How far a simulated output is from the observed data. A particle is
 /// accepted when this is within the generation's tolerance.
@@ -33,9 +33,21 @@ pub trait Distance<O>: Sync {
     }
 
     /// The observed series being fitted, for viewers to draw under simulated
-    /// trajectories. Not used by the engine.
+    /// trajectories. Not used by the engine. A distance over several series
+    /// implements [`Distance::observed_series`] instead.
     fn observed(&self) -> Option<Vec<f64>> {
         None
+    }
+
+    /// The observed series being fitted, each named to match the model's
+    /// [`CalibrationModel::trajectories`]. The default is the one unnamed
+    /// series of [`Distance::observed`], or none.
+    ///
+    /// [`CalibrationModel::trajectories`]: crate::CalibrationModel::trajectories
+    fn observed_series(&self) -> Vec<Series> {
+        self.observed()
+            .map(|values| vec![Series::unnamed(values)])
+            .unwrap_or_default()
     }
 
     /// Positions that matter to how outputs are scored, for viewers to mark:

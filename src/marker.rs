@@ -9,7 +9,8 @@ use std::path::Path;
 use crate::observer::{push_f64, push_str};
 
 /// A labelled x position, in the same index space as [`Distance::observed`]
-/// and the trajectories. Not used by the engine.
+/// and the trajectories (every [`Series`](crate::Series) of a run shares
+/// it). Not used by the engine.
 ///
 /// A run collects them from [`Distance::markers`] and
 /// [`CalibrationModel::markers`] into its log; [`append_markers`] adds more

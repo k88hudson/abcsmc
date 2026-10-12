@@ -3,8 +3,8 @@
 
 use abcsmc::{
     CalibrationModel, Draw as _, IntPrior, JsonlObserver, Marker, Posterior, Priors,
-    ProjectedTrajectory, Projection, RealPrior, RunLog, append_markers, define_priors, distance_to,
-    run_quantiles_with,
+    ProjectedTrajectory, Projection, RealPrior, RunLog, Series, append_markers, define_priors,
+    distance_to, run_quantiles_with,
 };
 use rand::{SeedableRng, rngs::StdRng};
 
@@ -70,7 +70,7 @@ fn a_log_reads_back_as_the_run_that_wrote_it() {
         assert_eq!(log.distance_description.as_deref(), Some("distance to 12"));
         assert_eq!(log.n_particles, 100);
         assert!(log.finished);
-        assert_eq!(log.observed, Some(vec![12.0]));
+        assert_eq!(log.observed, vec![Series::unnamed(vec![12.0])]);
         assert_eq!(
             log.markers,
             vec![
@@ -128,10 +128,7 @@ fn projections_append_and_the_latest_label_wins() {
     with_run("projection", |path, _| {
         let first = Projection {
             label: "baseline".into(),
-            trajectories: vec![ProjectedTrajectory {
-                weight: 1.0,
-                values: vec![1.0, 2.0],
-            }],
+            trajectories: vec![ProjectedTrajectory::new(1.0, vec![1.0, 2.0])],
         };
         let other = Projection {
             label: "control \"measures\"".into(),
@@ -140,13 +137,13 @@ fn projections_append_and_the_latest_label_wins() {
         let replacement = Projection {
             label: "baseline".into(),
             trajectories: vec![
-                ProjectedTrajectory {
-                    weight: 0.25,
-                    values: vec![3.0, f64::INFINITY],
-                },
+                ProjectedTrajectory::new(0.25, vec![3.0, f64::INFINITY]),
                 ProjectedTrajectory {
                     weight: 0.75,
-                    values: vec![4.0, 5.0],
+                    series: vec![
+                        Series::named("cases", vec![4.0, 5.0]),
+                        Series::named("deaths", vec![0.0, 1.0]),
+                    ],
                 },
             ],
         };
@@ -164,6 +161,31 @@ fn projections_append_and_the_latest_label_wins() {
             replacement.trajectories[1]
         );
     });
+}
+
+/// Logs written before series had names: `observed` is one series' values
+/// (or `null`), and a projected trajectory has `values`.
+#[test]
+fn a_log_without_series_names_reads_as_one_unnamed_series() {
+    let text = concat!(
+        r#"{"type":"run_started","id":"old","n_particles":1,"n_generations":1,"#,
+        r#""params":[{"name":"x","kind":"real"}],"observed":[1.0,null,3.0],"markers":[]}"#,
+        "\n",
+        r#"{"type":"projection","label":"p","trajectories":[{"weight":1.0,"values":[2.0,4.0]}]}"#,
+        "\n",
+    );
+    let log = RunLog::parse(text).unwrap();
+    assert_eq!(log.observed.len(), 1);
+    assert_eq!(log.observed[0].name, None);
+    assert_eq!(log.observed[0].values[0], 1.0);
+    assert!(log.observed[0].values[1].is_nan());
+    assert_eq!(
+        log.projections[0].trajectories,
+        vec![ProjectedTrajectory::new(1.0, vec![2.0, 4.0])]
+    );
+
+    let none = text.replace(r#""observed":[1.0,null,3.0]"#, r#""observed":null"#);
+    assert!(RunLog::parse(&none).unwrap().observed.is_empty());
 }
 
 #[test]

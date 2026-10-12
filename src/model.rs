@@ -1,5 +1,6 @@
 use crate::{
-    Draw, Marker, PerturbationKernel, Priors, VarianceAdapter, default_adapter, default_kernel,
+    Draw, Marker, PerturbationKernel, Priors, Series, VarianceAdapter, default_adapter,
+    default_kernel,
 };
 
 /// A model to be fit with ABC-SMC: it declares priors and simulates. How a
@@ -42,11 +43,24 @@ pub trait CalibrationModel {
     }
 
     /// An output's series on the same axis as [`Distance::observed`], for
-    /// viewers. Not used by the engine.
+    /// viewers. Not used by the engine. A model with several series
+    /// implements [`CalibrationModel::trajectories`] instead.
     ///
     /// [`Distance::observed`]: crate::Distance::observed
     fn trajectory(&self, _output: &Self::Output) -> Option<Vec<f64>> {
         None
+    }
+
+    /// An output's series, each named so viewers can draw it against the
+    /// observed series of the same name ([`Distance::observed_series`]).
+    /// Return them in a fixed order. The default is the one unnamed series of
+    /// [`CalibrationModel::trajectory`], or none.
+    ///
+    /// [`Distance::observed_series`]: crate::Distance::observed_series
+    fn trajectories(&self, output: &Self::Output) -> Vec<Series> {
+        self.trajectory(output)
+            .map(|values| vec![Series::unnamed(values)])
+            .unwrap_or_default()
     }
 
     /// Positions that matter to the model, for viewers to mark on the

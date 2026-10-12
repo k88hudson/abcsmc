@@ -6,7 +6,7 @@
 use std::path::Path;
 
 use abcsmc::{
-    CalibrationModel, Distance, Generation, JsonlObserver, Marker, Particle, Priors,
+    CalibrationModel, Distance, Generation, JsonlObserver, Marker, Particle, Priors, Series,
     StdoutObserver, define_priors, discrete_uniform_prior, distance, exponential_prior,
     run_quantiles_with,
 };
@@ -64,13 +64,35 @@ impl CalibrationModel for RenewalFit {
         RenewalModel::simulate(&parameters, &mut StdRng::seed_from_u64(seed))
     }
 
-    fn trajectory(&self, output: &RenewalOutput) -> Option<Vec<f64>> {
-        Some(as_f64s(&output.symptomatic_incidence))
+    /// The two scored series, see [`IncidenceDistance`].
+    fn trajectories(&self, output: &RenewalOutput) -> Vec<Series> {
+        vec![
+            Series::named(DAILY, as_f64s(&output.symptomatic_incidence)),
+            Series::named(
+                CUMULATIVE,
+                as_f64s(&cumulative(&output.symptomatic_incidence)),
+            ),
+        ]
     }
 }
 
+/// Series names, shared by the model's trajectories and the distance's
+/// observed series so viewers pair them.
+const DAILY: &str = "Symptomatic incidence";
+const CUMULATIVE: &str = "Cumulative symptomatic incidence";
+
 fn as_f64s(counts: &[u64]) -> Vec<f64> {
     counts.iter().map(|&x| x as f64).collect()
+}
+
+fn cumulative(counts: &[u64]) -> Vec<u64> {
+    counts
+        .iter()
+        .scan(0, |total, &x| {
+            *total += x;
+            Some(*total)
+        })
+        .collect()
 }
 
 /// Ways to score simulated symptomatic incidence against the observed series.
@@ -85,7 +107,10 @@ enum Metric {
     TotalCases,
 }
 
-/// The run's distance: one [`Metric`] over the fitted days.
+/// The run's distance over two series of the fitted days: one [`Metric`] on
+/// daily symptomatic incidence, plus the mean absolute error of cumulative
+/// incidence, which holds the outbreak's size to the data as well as its
+/// shape.
 struct IncidenceDistance {
     metric: Metric,
     observed: Vec<u64>,
@@ -95,11 +120,12 @@ impl Distance<RenewalOutput> for IncidenceDistance {
     fn distance(&self, output: &RenewalOutput) -> f64 {
         let observed = &self.observed;
         let simulated = &output.symptomatic_incidence[..observed.len()];
-        match self.metric {
+        let daily = match self.metric {
             Metric::DailyL1 => distance::l1(simulated, observed),
             Metric::WeeklyL1 => distance::l1(&weekly(simulated), &weekly(observed)),
             Metric::TotalCases => distance::total_difference(simulated, observed),
-        }
+        };
+        daily + distance::mean_absolute_error(&cumulative(simulated), &cumulative(observed))
     }
 
     fn description(&self) -> Option<String> {
@@ -109,13 +135,16 @@ impl Distance<RenewalOutput> for IncidenceDistance {
             Metric::TotalCases => "Absolute difference in total symptomatic incidence",
         };
         Some(format!(
-            "{metric} over the first {} days",
+            "{metric} over the first {} days, plus the mean absolute error of cumulative incidence",
             self.observed.len()
         ))
     }
 
-    fn observed(&self) -> Option<Vec<f64>> {
-        Some(as_f64s(&self.observed))
+    fn observed_series(&self) -> Vec<Series> {
+        vec![
+            Series::named(DAILY, as_f64s(&self.observed)),
+            Series::named(CUMULATIVE, as_f64s(&cumulative(&self.observed))),
+        ]
     }
 
     /// The last fitted day, and under the weekly metric each week's first day.

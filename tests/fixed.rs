@@ -5,7 +5,7 @@ use std::collections::HashSet;
 
 use abcsmc::{
     CalibrationModel, Distance, Draw, Generation, IntPrior, JsonlObserver, Marker, Params, Priors,
-    RealPrior, Silent, define_priors, distance_to, run, run_quantiles, run_quantiles_with,
+    RealPrior, Series, Silent, define_priors, distance_to, run, run_quantiles, run_quantiles_with,
     run_with,
 };
 use rand::{Rng, SeedableRng, rngs::StdRng};
@@ -334,7 +334,10 @@ fn jsonl_log_records_the_whole_run() {
     assert_eq!(started[0]["params"][0]["name"], "param_0");
     assert_eq!(started[0]["params"][0]["kind"], "real");
     assert!(started[0]["params"][0]["prior"]["type"].is_string());
-    assert_eq!(started[0]["observed"], serde_json::json!([5.0, 5.0]));
+    assert_eq!(
+        started[0]["observed"],
+        serde_json::json!([{"name": null, "values": [5.0, 5.0]}])
+    );
     assert_eq!(
         started[0]["markers"],
         serde_json::json!([{"x": 1.0, "label": "scored"}, {"x": 0.5, "label": null}])
@@ -367,14 +370,17 @@ fn jsonl_log_records_the_whole_run() {
         assert_eq!(trajectories.len(), 10);
         assert_eq!(trajectories[1]["particle"], N / 10);
         assert_eq!(trajectories[9]["particle"], 9 * N / 10);
-        assert_eq!(trajectories[0]["values"].as_array().unwrap().len(), 2);
+        let series = trajectories[0]["series"].as_array().unwrap();
+        assert_eq!(series.len(), 1, "one unnamed series");
+        assert!(series[0]["name"].is_null());
+        assert_eq!(series[0]["values"].as_array().unwrap().len(), 2);
         // The first rejected simulations, up to the default cap of 200.
         let rejected = event["rejected"].as_array().unwrap();
         let n_rejected = generation.stats.attempts as usize - N;
         assert_eq!(rejected.len(), n_rejected.min(200));
         for r in rejected {
             assert!(r["distance"].as_f64().unwrap() > generation.stats.tolerance);
-            assert_eq!(r["values"].as_array().unwrap().len(), 2);
+            assert_eq!(r["series"][0]["values"].as_array().unwrap().len(), 2);
         }
     }
 
@@ -404,6 +410,89 @@ fn jsonl_log_records_the_whole_run() {
 
     assert_eq!(events.last().unwrap()["type"], "run_finished");
     assert_eq!(events.last().unwrap()["generations"], generations.len());
+}
+
+/// `NoisyModel` with two named series: the output and its double.
+struct TwoSeriesModel;
+
+impl CalibrationModel for TwoSeriesModel {
+    type Draw = Params;
+    type Output = f64;
+
+    fn priors(&self) -> Priors {
+        NoisyModel.priors()
+    }
+
+    fn simulate(&self, params: &Params, seed: u64) -> f64 {
+        NoisyModel.simulate(params, seed)
+    }
+
+    fn trajectories(&self, output: &f64) -> Vec<Series> {
+        vec![
+            Series::named("value", vec![*output]),
+            Series::named("double", vec![2.0 * output]),
+        ]
+    }
+}
+
+/// Scores both series of `TwoSeriesModel`, and exposes both targets.
+struct TwoSeriesDistance;
+
+impl Distance<f64> for TwoSeriesDistance {
+    fn distance(&self, output: &f64) -> f64 {
+        (output - 5.0).abs() + (2.0 * output - 10.0).abs()
+    }
+
+    fn observed_series(&self) -> Vec<Series> {
+        vec![
+            Series::named("value", vec![5.0]),
+            Series::named("double", vec![10.0]),
+        ]
+    }
+}
+
+#[test]
+fn jsonl_log_names_every_series() {
+    let dir = std::env::temp_dir().join(format!("abcsmc-series-{}", std::process::id()));
+    let log = JsonlObserver::create(&dir, "series").unwrap();
+    let path = log.path().to_path_buf();
+    run_with(
+        &TwoSeriesModel,
+        &TwoSeriesDistance,
+        &TOLERANCES[..1],
+        N,
+        "",
+        &log,
+    );
+    drop(log);
+
+    let text = std::fs::read_to_string(&path).unwrap();
+    std::fs::remove_dir_all(&dir).unwrap();
+    let events: Vec<serde_json::Value> = text
+        .lines()
+        .map(|line| serde_json::from_str(line).unwrap())
+        .collect();
+
+    let started = &events[0];
+    assert_eq!(
+        started["observed"],
+        serde_json::json!([
+            {"name": "value", "values": [5.0]},
+            {"name": "double", "values": [10.0]}
+        ])
+    );
+    let completed = events
+        .iter()
+        .find(|e| e["type"] == "generation_completed")
+        .unwrap();
+    let series = completed["trajectories"][0]["series"].as_array().unwrap();
+    assert_eq!(series[0]["name"], "value");
+    assert_eq!(series[1]["name"], "double");
+    let value = series[0]["values"][0].as_f64().unwrap();
+    assert_eq!(series[1]["values"][0].as_f64().unwrap(), 2.0 * value);
+    let rejected = completed["rejected"].as_array().unwrap();
+    assert!(!rejected.is_empty());
+    assert_eq!(rejected[0]["series"][1]["name"], "double");
 }
 
 #[test]

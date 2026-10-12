@@ -78,7 +78,7 @@ pub fn write_scenarios(
                 let output = scenario.model.simulate(&draw, particle.seed);
                 ProjectedTrajectory {
                     weight,
-                    values: scenario.model.trajectory(&output).unwrap(),
+                    series: scenario.model.trajectories(&output),
                 }
             })
             .collect();

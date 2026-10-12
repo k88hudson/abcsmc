@@ -6,14 +6,16 @@ use std::fs::OpenOptions;
 use std::io::{self, Write};
 use std::path::Path;
 
-use crate::observer::{push_f64, push_f64s, push_str};
+use crate::Series;
+use crate::observer::{push_f64, push_series, push_str};
 
 /// Simulated series from posterior particles under some scenario, stored in
 /// the run log as a `projection` event:
-/// `{"type":"projection","label":...,"trajectories":[{"weight":...,"values":[...]}]}`.
+/// `{"type":"projection","label":...,"trajectories":[{"weight":...,"series":[{"name":...,"values":[...]}]}]}`.
 ///
 /// Values are on the same axis as the model's observed series and start at the
-/// same index, so a viewer can draw them past the end of the data. A later
+/// same index, so a viewer can draw them past the end of the data; each
+/// series is drawn against the observed series of its name. A later
 /// projection with the same label replaces the earlier one.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Projection {
@@ -25,7 +27,20 @@ pub struct Projection {
 pub struct ProjectedTrajectory {
     /// The posterior weight of the particle this was simulated from.
     pub weight: f64,
-    pub values: Vec<f64>,
+    /// The model's [`trajectories`](crate::CalibrationModel::trajectories)
+    /// of the simulation.
+    pub series: Vec<Series>,
+}
+
+impl ProjectedTrajectory {
+    /// A trajectory of one unnamed series, as a model with
+    /// [`trajectory`](crate::CalibrationModel::trajectory) gives.
+    pub fn new(weight: f64, values: Vec<f64>) -> Self {
+        Self {
+            weight,
+            series: vec![Series::unnamed(values)],
+        }
+    }
 }
 
 impl Projection {
@@ -40,8 +55,8 @@ impl Projection {
             }
             line.push_str(r#"{"weight":"#);
             push_f64(&mut line, trajectory.weight);
-            line.push_str(r#","values":"#);
-            push_f64s(&mut line, &trajectory.values);
+            line.push_str(r#","series":"#);
+            push_series(&mut line, &trajectory.series);
             line.push('}');
         }
         line.push_str("]}");
@@ -64,7 +79,7 @@ mod reader {
     use super::{ProjectedTrajectory, Projection};
     use crate::marker::merge_markers;
     use crate::{
-        Draw, GenerationStats, Marker, ParamMeta, ParamPrior, Params, Population, Value,
+        Draw, GenerationStats, Marker, ParamMeta, ParamPrior, Params, Population, Series, Value,
         resample_indices,
     };
 
@@ -81,7 +96,8 @@ mod reader {
         /// The quantile schedule, if the run's tolerances came from one.
         pub quantiles: Option<Vec<f64>>,
         pub params: Vec<ParamMeta>,
-        pub observed: Option<Vec<f64>>,
+        /// The distance's observed series; empty when it gave none.
+        pub observed: Vec<Series>,
         /// The run's markers, with any appended `markers` events merged in.
         pub markers: Vec<Marker>,
         /// The completed generations. A generation that was under way when
@@ -180,10 +196,54 @@ mod reader {
     }
 
     /// Non-finite values are written as `null` and read back as NaN.
+    type Values = Vec<Option<f64>>;
+
+    fn values_of(values: Values) -> Vec<f64> {
+        values.into_iter().map(|v| v.unwrap_or(f64::NAN)).collect()
+    }
+
+    #[derive(Deserialize)]
+    struct SeriesSpec {
+        #[serde(default)]
+        name: Option<String>,
+        values: Values,
+    }
+
+    impl From<SeriesSpec> for Series {
+        fn from(spec: SeriesSpec) -> Self {
+            Series {
+                name: spec.name,
+                values: values_of(spec.values),
+            }
+        }
+    }
+
+    /// A list of series, or in older logs one unnamed series' values (or
+    /// `null` for none).
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum SeriesListSpec {
+        Series(Vec<SeriesSpec>),
+        Values(Values),
+    }
+
+    fn series_of(spec: Option<SeriesListSpec>) -> Vec<Series> {
+        match spec {
+            Some(SeriesListSpec::Series(series)) => series.into_iter().map(Series::from).collect(),
+            Some(SeriesListSpec::Values(values)) => vec![Series::unnamed(values_of(values))],
+            None => Vec::new(),
+        }
+    }
+
+    /// A projected trajectory: `series`, or in older logs the `values` of
+    /// one unnamed series.
     #[derive(Deserialize)]
     struct TrajectorySpec {
         weight: f64,
-        values: Vec<Option<f64>>,
+        #[serde(default)]
+        series: Option<Vec<SeriesSpec>>,
+        #[serde(default)]
+        values: Option<Values>,
     }
 
     #[derive(Deserialize)]
@@ -199,7 +259,8 @@ mod reader {
             #[serde(default)]
             quantiles: Option<Vec<f64>>,
             params: Vec<ParamSpec>,
-            observed: Option<Vec<Option<f64>>>,
+            #[serde(default)]
+            observed: Option<SeriesListSpec>,
             #[serde(default)]
             markers: Vec<MarkerSpec>,
         },
@@ -275,9 +336,7 @@ mod reader {
                             n_particles,
                             quantiles,
                             params,
-                            observed: observed.map(|series| {
-                                series.into_iter().map(|v| v.unwrap_or(f64::NAN)).collect()
-                            }),
+                            observed: series_of(observed),
                             markers: markers.into_iter().map(Marker::from).collect(),
                             generations: Vec::new(),
                             finished: false,
@@ -330,11 +389,15 @@ mod reader {
                                         .into_iter()
                                         .map(|t| ProjectedTrajectory {
                                             weight: t.weight,
-                                            values: t
-                                                .values
-                                                .into_iter()
-                                                .map(|v| v.unwrap_or(f64::NAN))
-                                                .collect(),
+                                            series: match (t.series, t.values) {
+                                                (Some(series), _) => {
+                                                    series.into_iter().map(Series::from).collect()
+                                                }
+                                                (None, Some(values)) => {
+                                                    vec![Series::unnamed(values_of(values))]
+                                                }
+                                                (None, None) => Vec::new(),
+                                            },
                                         })
                                         .collect(),
                                 });

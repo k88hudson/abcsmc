@@ -12,7 +12,9 @@ use std::time::Duration;
 
 use crate::marker::push_markers;
 use crate::platform::{Bar, Instant};
-use crate::{CalibrationModel, Distance, Draw, Generation, Marker, ParamPrior, Params, Value};
+use crate::{
+    CalibrationModel, Distance, Draw, Generation, Marker, ParamPrior, Params, Series, Value,
+};
 
 /// What a run declares before its first generation.
 #[derive(Clone, Debug)]
@@ -27,8 +29,8 @@ pub struct RunMeta {
     /// The quantile schedule, when tolerances come from the prior's distances.
     pub quantiles: Option<Vec<f64>>,
     pub params: Vec<ParamMeta>,
-    /// The observed series the distance fits, if it exposes one.
-    pub observed: Option<Vec<f64>>,
+    /// The observed series the distance fits, if it exposes any.
+    pub observed: Vec<Series>,
     /// Positions to mark on the trajectories: the distance's, then the
     /// model's.
     pub markers: Vec<Marker>,
@@ -72,7 +74,7 @@ impl RunMeta {
             n_generations,
             quantiles: quantiles.map(<[f64]>::to_vec),
             params,
-            observed: distance.observed(),
+            observed: distance.observed_series(),
             markers: [distance.markers(), model.markers()].concat(),
         }
     }
@@ -252,19 +254,23 @@ impl<M: CalibrationModel> RunObserver<M> for StdoutObserver {
 ///   `distance_description` (each a string or `null`), `n_particles`, `n_generations`,
 ///   `quantiles` (or `null`), `params` (`[{name, kind, prior}]`, kind `real`
 ///   or `int`, prior a type-tagged document such as
-///   `{"type":"Uniform","a":0.5,"b":3.0}`), `observed` (or `null`), `markers`
-///   (`[{x, label}]`, label a string or `null`: the positions the distance and
-///   model mark on the trajectories, see [`Marker`]).
+///   `{"type":"Uniform","a":0.5,"b":3.0}`), `observed` (`[{name, values}]`,
+///   the distance's observed series, name a string or `null`; empty when it
+///   has none), `markers` (`[{x, label}]`, label a string or `null`: the
+///   positions the distance and model mark on the trajectories, see
+///   [`Marker`]).
 /// - `generation_started`: `generation`, `tolerance` (`null` when infinite).
 /// - `progress`: `generation`, running `accepted` and `attempts` counts, and
 ///   `batch`, the `{params, distance}` of every particle accepted since the
 ///   previous progress line. Written at most every `flush_every`.
 /// - `generation_completed`: `generation`, `stats`, `particles`
 ///   (`{params, weight, distance, seed}`, the seed as a string), and
-///   `trajectories` (`{particle, values}` for an even sample of at most
-///   `max_trajectories` particles, empty when the model exposes none), and
-///   `rejected` (`{distance, values}`, the trajectories of the first
-///   `max_rejected` simulations the generation rejected, in arrival order).
+///   `trajectories` (`{particle, series}` for an even sample of at most
+///   `max_trajectories` particles, `series` the model's
+///   [`trajectories`](CalibrationModel::trajectories) as `[{name, values}]`;
+///   empty when the model exposes none), and `rejected` (`{distance,
+///   series}`, the trajectories of the first `max_rejected` simulations the
+///   generation rejected, in arrival order).
 ///
 /// Every accepted particle appears in exactly one `progress` batch: the batch
 /// pending when a generation completes is written before its
@@ -289,7 +295,7 @@ pub struct JsonlObserver {
     // Rejections seen this generation, so workers skip the lock once the
     // sample is full.
     rejected_seen: AtomicUsize,
-    rejected: Mutex<Vec<(f64, Vec<f64>)>>,
+    rejected: Mutex<Vec<(f64, Vec<Series>)>>,
     flush_every: Duration,
     // Generations completed since `run_started`, across resumes.
     completed: AtomicUsize,
@@ -448,7 +454,7 @@ impl<M: CalibrationModel> RunObserver<M> for JsonlObserver {
             line.push('}');
         }
         line.push_str(r#"],"observed":"#);
-        push_opt_f64s(&mut line, meta.observed.as_deref());
+        push_series(&mut line, &meta.observed);
         line.push_str(r#","markers":"#);
         push_markers(&mut line, &meta.markers);
         line.push('}');
@@ -499,8 +505,9 @@ impl<M: CalibrationModel> RunObserver<M> for JsonlObserver {
         if self.rejected_seen.fetch_add(1, Ordering::Relaxed) >= self.max_rejected {
             return;
         }
-        if let Some(values) = model.trajectory(output) {
-            self.rejected.lock().unwrap().push((distance, values));
+        let series = model.trajectories(output);
+        if !series.is_empty() {
+            self.rejected.lock().unwrap().push((distance, series));
         }
     }
 
@@ -555,25 +562,26 @@ impl<M: CalibrationModel> RunObserver<M> for JsonlObserver {
             .step_by(stride)
             .take(self.max_trajectories);
         for (written, (index, particle)) in sampled.enumerate() {
-            let Some(values) = model.trajectory(&particle.output) else {
+            let series = model.trajectories(&particle.output);
+            if series.is_empty() {
                 break;
-            };
+            }
             if written > 0 {
                 line.push(',');
             }
-            line.push_str(&format!(r#"{{"particle":{index},"values":"#));
-            push_f64s(&mut line, &values);
+            line.push_str(&format!(r#"{{"particle":{index},"series":"#));
+            push_series(&mut line, &series);
             line.push('}');
         }
         line.push_str(r#"],"rejected":["#);
-        for (i, (distance, values)) in self.rejected.lock().unwrap().drain(..).enumerate() {
+        for (i, (distance, series)) in self.rejected.lock().unwrap().drain(..).enumerate() {
             if i > 0 {
                 line.push(',');
             }
             line.push_str(r#"{"distance":"#);
             push_f64(&mut line, distance);
-            line.push_str(r#","values":"#);
-            push_f64s(&mut line, &values);
+            line.push_str(r#","series":"#);
+            push_series(&mut line, &series);
             line.push('}');
         }
         line.push_str("]}");
@@ -620,6 +628,22 @@ fn push_opt_f64s(out: &mut String, xs: Option<&[f64]>) {
         Some(xs) => push_f64s(out, xs),
         None => out.push_str("null"),
     }
+}
+
+/// `[{"name":...,"values":[...]}, ...]`, the name `null` when unnamed.
+pub(crate) fn push_series(out: &mut String, series: &[Series]) {
+    out.push('[');
+    for (i, s) in series.iter().enumerate() {
+        if i > 0 {
+            out.push(',');
+        }
+        out.push_str(r#"{"name":"#);
+        push_opt_str(out, s.name.as_deref());
+        out.push_str(r#","values":"#);
+        push_f64s(out, &s.values);
+        out.push('}');
+    }
+    out.push(']');
 }
 
 fn push_opt_str(out: &mut String, s: Option<&str>) {

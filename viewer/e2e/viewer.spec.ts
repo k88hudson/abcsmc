@@ -25,19 +25,28 @@ test.describe("without file handles", () => {
     await page.getByLabel("Load run.jsonl").setInputFiles(fixture);
 
     await expect(page.getByTestId("status")).toHaveText("Finished");
-    await expect(page.getByTestId("run-id")).toHaveText(/^\d{8}-\d{6}$/);
+    await expect(page.getByTestId("run-id")).toHaveText("renewal");
     await expect(page.locator(".gen-table tbody tr")).toHaveCount(5);
     await expect(page.locator(".gen-table tbody tr").first()).toContainText(
       "∞",
     );
 
     await expect(page.getByTestId("live")).toHaveCount(0);
-    // Target data sits on its own tab, as a chart and a table.
+    // Target data sits on its own tab: a chart per observed series and one
+    // table with a column each. The fixture's run scores two series.
     const target = page.getByTestId("target");
     await expect(target).toBeHidden();
     await page.getByRole("tab", { name: "Target data" }).click();
-    await expect(target).toContainText("42 observed points");
-    await expect(target.locator(".line-chart-wrapper")).toHaveCount(1);
+    await expect(target).toContainText(
+      "Symptomatic incidence: 42 observed points",
+    );
+    await expect(target).toContainText(
+      "Cumulative symptomatic incidence: 42 observed points",
+    );
+    await expect(target.locator(".line-chart-wrapper")).toHaveCount(2);
+    await expect(target.locator("thead")).toContainText(
+      "Cumulative symptomatic incidence",
+    );
     await expect(target.locator("tbody tr")).toHaveCount(42);
     await page.getByRole("tab", { name: "Calibration" }).click();
     await expect(page.getByTestId("trajectories")).toContainText("Gen 4");
@@ -63,8 +72,10 @@ test.describe("without file handles", () => {
     await expect(page.getByTestId("projections")).toBeHidden();
     await page.getByRole("tab", { name: "Projections" }).click();
     await expect(page.getByTestId("projections")).toBeVisible();
-    await expect(page.getByTestId("projections")).toContainText("baseline");
-    await expect(page.getByTestId("projections")).toContainText("20 particles");
+    await expect(page.getByTestId("projections")).toContainText("Baseline");
+    await expect(page.getByTestId("projections")).toContainText(
+      "200 particles",
+    );
     await expect(page.getByTestId("trajectories")).toBeHidden();
     await page.getByRole("tab", { name: "Calibration" }).click();
     // Per generation shows the selected generation alone until asked for all.
@@ -105,17 +116,19 @@ test.describe("without file handles", () => {
     await page.getByLabel("Load run.jsonl").setInputFiles(fixture);
     await expect(page.getByTestId("status")).toHaveText("Finished");
 
-    // The fixture ends with a markers event: one labelled, one not.
+    // The fixture ends with a markers event: one labelled, one not. Both
+    // are drawn on every series' chart.
     const trajectories = page.getByTestId("trajectories");
-    await expect(trajectories.locator(".line-chart-marker")).toHaveCount(2);
-    await expect(trajectories.locator('svg[role="img"]')).toContainText(
+    await expect(trajectories.locator(".line-chart-wrapper")).toHaveCount(2);
+    await expect(trajectories.locator(".line-chart-marker")).toHaveCount(4);
+    await expect(trajectories.locator('svg[role="img"]').first()).toContainText(
       "Last fitted day",
     );
 
     await page.getByRole("tab", { name: "Target data" }).click();
     await expect(
       page.getByTestId("target").locator(".line-chart-marker"),
-    ).toHaveCount(2);
+    ).toHaveCount(4);
     await page.getByRole("tab", { name: "Projections" }).click();
     const projections = page.getByTestId("projections");
     await expect(projections.locator(".line-chart-marker")).toHaveCount(
@@ -125,7 +138,12 @@ test.describe("without file handles", () => {
 
   test("a run under way says which generation it is on", async ({ page }) => {
     // The fixture cut off just after generation 2 starts: the third of five.
-    const lines = (await readFile(fixture, "utf8")).split("\n").slice(0, 6);
+    const all = (await readFile(fixture, "utf8")).split("\n");
+    const started = all.findIndex((line) => {
+      const event = JSON.parse(line);
+      return event.type === "generation_started" && event.generation === 2;
+    });
+    const lines = all.slice(0, started + 1);
     await page.goto("/");
     await page.getByLabel("Load run.jsonl").setInputFiles({
       name: "partial.jsonl",
@@ -190,30 +208,39 @@ test.describe("without file handles", () => {
     await page.getByLabel("Load run.jsonl").setInputFiles(fixture);
     await expect(page.getByTestId("status")).toHaveText("Finished");
 
+    // One chart per series, both following the same legend: a click on
+    // either hides the item on both, 20 lines each.
     const section = page.getByTestId("trajectories");
     await expect(section).toContainText("20 rejected simulations");
+    await expect(section.locator(".line-chart-wrapper")).toHaveCount(2);
     const lines = section.locator("svg path[stroke]");
     const all = await lines.count();
     const texts = () => section.locator("svg text").allTextContents();
     const before = await texts();
-    const item = (label: string) =>
+    const items = (label: string) =>
       section.locator("svg text").getByText(label, { exact: true });
+    const item = (label: string) => items(label).first();
 
     await item("Rejected").click();
-    await expect(lines).toHaveCount(all - 20);
-    await item("Accepted").click();
     await expect(lines).toHaveCount(all - 40);
+    await items("Accepted").nth(1).click();
+    await expect(lines).toHaveCount(all - 80);
     // The axes fit what is left, the observed series.
     expect(await texts()).not.toEqual(before);
     await item("Rejected").click();
-    await expect(lines).toHaveCount(all - 20);
+    await expect(lines).toHaveCount(all - 40);
 
-    // Hidden items stay in the legend, struck through.
-    await expect(item("Accepted")).toHaveCSS(
-      "text-decoration-line",
-      "line-through",
-    );
-    await expect(item("Rejected")).toHaveCSS("text-decoration-line", "none");
+    // Hidden items stay in the legend, struck through, on every chart.
+    for (const i of [0, 1]) {
+      await expect(items("Accepted").nth(i)).toHaveCSS(
+        "text-decoration-line",
+        "line-through",
+      );
+      await expect(items("Rejected").nth(i)).toHaveCSS(
+        "text-decoration-line",
+        "none",
+      );
+    }
 
     // With everything off the legend is still there to turn it back on.
     await item("Rejected").click();
@@ -236,13 +263,14 @@ test.describe("without file handles", () => {
     await expect(page.getByTestId("status")).toHaveText("Finished");
 
     const section = page.getByTestId("trajectories");
-    await section.getByLabel("Chart options").click();
+    await section.getByLabel("Chart options").first().click();
     await page.getByRole("menuitem", { name: "Fullscreen" }).click();
 
-    // The expanded chart is moved out of the section, to the body.
+    // The expanded chart is moved out of the section, to the body; the
+    // other series' chart stays.
     const expanded = page.locator(".line-chart-wrapper.is-fullscreen");
     await expect(expanded).toBeVisible();
-    await expect(section.locator(".line-chart-wrapper")).toHaveCount(0);
+    await expect(section.locator(".line-chart-wrapper")).toHaveCount(1);
     const lines = expanded.locator("svg path[stroke]");
     const all = await lines.count();
     const rejected = expanded
@@ -256,7 +284,10 @@ test.describe("without file handles", () => {
     await expanded.getByLabel("Collapse").click();
     await expect(expanded).toHaveCount(0);
     await expect(
-      section.locator("svg text").getByText("Rejected", { exact: true }),
+      section
+        .locator("svg text")
+        .getByText("Rejected", { exact: true })
+        .first(),
     ).toHaveCSS("text-decoration-line", "line-through");
   });
 
@@ -270,27 +301,31 @@ test.describe("without file handles", () => {
     const section = page.getByTestId("trajectories");
     const view = section.getByRole("group", { name: "View" });
     await view.getByRole("button", { name: "Credible intervals" }).click();
+    // One chart per series.
     const intervals = page.getByTestId("intervals");
-    await expect(intervals.locator(".line-chart-wrapper")).toHaveCount(1);
+    await expect(intervals.locator(".line-chart-wrapper")).toHaveCount(2);
     await expect(intervals).toContainText(
-      "Credible intervals: Gen 4, 20 of 100 accepted particles",
+      "Symptomatic incidence credible intervals: Gen 4, 20 of 100 accepted particles",
+    );
+    await expect(intervals).toContainText(
+      "Cumulative symptomatic incidence credible intervals: Gen 4",
     );
     await expect(
       intervals.locator("svg text").getByText("Median", { exact: true }),
-    ).toBeVisible();
+    ).toHaveCount(2);
     await expect(section.locator("[data-trajectory-chart]")).toHaveCount(0);
     await expect(section.getByText("Facet by generation")).toHaveCount(0);
 
-    // Every generation gets its own chart; they are never pooled.
+    // Every generation gets its own chart per series; they are never pooled.
     await section.getByRole("combobox", { name: "Generation" }).click();
     await page.getByRole("option", { name: "All generations" }).click();
-    await expect(intervals.locator(".line-chart-wrapper")).toHaveCount(5);
+    await expect(intervals.locator(".line-chart-wrapper")).toHaveCount(10);
     await expect(
       intervals.locator(".line-chart-wrapper").first(),
-    ).toContainText("Credible intervals: Prior");
+    ).toContainText("Symptomatic incidence credible intervals: Prior");
 
     await view.getByRole("button", { name: "Trajectories" }).click();
-    await expect(section.locator("[data-trajectory-chart]")).toHaveCount(1);
+    await expect(section.locator("[data-trajectory-chart]")).toHaveCount(2);
     await expect(intervals).toHaveCount(0);
   });
 
@@ -313,13 +348,17 @@ test.describe("without file handles", () => {
       "All generations, 100 of 500 accepted particles, 80 rejected simulations",
     );
 
-    // Faceted, each generation gets its own chart on shared axes.
+    // Faceted, each generation gets its own chart per series, a series'
+    // facets on shared axes.
     const charts = section.locator(".line-chart-wrapper");
-    await expect(charts).toHaveCount(1);
+    await expect(charts).toHaveCount(2);
     await section.getByText("Facet by generation").click();
-    await expect(charts).toHaveCount(5);
+    await expect(charts).toHaveCount(10);
     await expect(charts.first()).toContainText(
-      "Prior: 20 accepted, 0 rejected",
+      "Symptomatic incidence, Prior: 20 accepted, 0 rejected",
+    );
+    await expect(charts.nth(5)).toContainText(
+      "Cumulative symptomatic incidence, Prior: 20 accepted, 0 rejected",
     );
     const ticks = (i: number) =>
       charts
@@ -332,7 +371,7 @@ test.describe("without file handles", () => {
     await section.getByRole("combobox", { name: "Generation" }).click();
     await page.getByRole("option", { name: "Generation 2" }).click();
     await expect(subtitle).toContainText("Gen 2, 20 of 100");
-    await expect(charts).toHaveCount(1);
+    await expect(charts).toHaveCount(2);
     await expect(section.getByText("Facet by generation")).toHaveCount(0);
     await expect(page.locator(".gen-table tbody tr.selected")).toContainText(
       "2",
@@ -439,7 +478,8 @@ test.describe("without file handles", () => {
 
     const chart = page
       .getByTestId("trajectories")
-      .locator(".line-chart-wrapper");
+      .locator(".line-chart-wrapper")
+      .first();
     await chart.scrollIntoViewIfNeeded();
     const ticks = () =>
       chart
@@ -532,7 +572,7 @@ test.describe("without file handles", () => {
     const downloading = page.waitForEvent("download");
     await page.getByRole("button", { name: "Export outputs" }).click();
     const download = await downloading;
-    expect(download.suggestedFilename()).toMatch(/^\d{8}-\d{6}-outputs\.zip$/);
+    expect(download.suggestedFilename()).toBe("renewal-outputs.zip");
 
     const entries = unzipSync(
       new Uint8Array(await readFile(await download.path())),
@@ -546,9 +586,12 @@ test.describe("without file handles", () => {
     );
     expect(particles).toHaveLength(1 + 5 * 100);
     const trajectories = strFromU8(entries["trajectories.csv"]!).split("\n");
-    expect(trajectories[0]).toBe("generation,particle,index,value");
+    expect(trajectories[0]).toBe("generation,particle,series,index,value");
     expect(new Set(trajectories.slice(1).map((r) => r.split(",")[0]))).toEqual(
       new Set(["0", "1", "2", "3", "4"]),
+    );
+    expect(new Set(trajectories.slice(1).map((r) => r.split(",")[2]))).toEqual(
+      new Set(["Symptomatic incidence", "Cumulative symptomatic incidence"]),
     );
 
     const posteriors = strFromU8(entries["posteriors.csv"]!).split("\n");

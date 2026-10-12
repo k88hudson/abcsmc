@@ -39,15 +39,25 @@ export interface Particle {
   seed: string;
 }
 
+// One series of a simulation or of the observed data, on the shared index
+// axis. A simulation has one per quantity the model exposes (cases and
+// hospitalizations, say); each is drawn against the observed series of the
+// same name. `name` is null for the single series of a model that names none.
+// Non-finite values are written as null.
+export interface Series {
+  name: string | null;
+  values: (number | null)[];
+}
+
 export interface Trajectory {
   particle: number;
-  values: number[];
+  series: Series[];
 }
 
 // A simulation the generation rejected: its distance exceeded the tolerance.
 export interface RejectedTrajectory {
   distance: number;
-  values: number[];
+  series: Series[];
 }
 
 export interface Generation {
@@ -67,8 +77,7 @@ export interface Generation {
 
 export interface ProjectedTrajectory {
   weight: number;
-  // Non-finite values are written as null.
-  values: (number | null)[];
+  series: Series[];
 }
 
 // Posterior particles simulated under a scenario, appended to the log after
@@ -95,8 +104,8 @@ export interface RunState {
   nGenerations: number;
   quantiles: number[] | null;
   params: ParamMeta[];
-  // Non-finite values are written as null: points the series does not have.
-  observed: (number | null)[] | null;
+  // The observed series the distance fits; empty when it gives none.
+  observed: Series[];
   markers: Marker[];
   generations: Generation[];
   projections: Projection[];
@@ -117,7 +126,9 @@ export type RunEvent =
       n_generations: number;
       quantiles: number[] | null;
       params: ParamMeta[];
-      observed: (number | null)[] | null;
+      // Logs written before series had names hold one series' values here,
+      // or null for none.
+      observed: Series[] | (number | null)[] | null;
       // Absent in logs written before markers existed.
       markers?: Marker[];
     }
@@ -134,15 +145,66 @@ export type RunEvent =
       generation: number;
       stats: GenerationStats;
       particles: Particle[];
-      trajectories: Trajectory[];
+      trajectories: LoggedTrajectory<{ particle: number }>[];
       // Absent in logs written before rejected simulations were logged.
-      rejected?: RejectedTrajectory[];
+      rejected?: LoggedTrajectory<{ distance: number }>[];
     }
   | { type: "generation_abandoned"; generation: number }
   | { type: "run_finished"; generations: number }
   | { type: "run_resumed"; completed: number; n_generations: number }
-  | { type: "projection"; label: string; trajectories: ProjectedTrajectory[] }
+  | {
+      type: "projection";
+      label: string;
+      trajectories: LoggedTrajectory<{ weight: number }>[];
+    }
   | { type: "markers"; markers: Marker[] };
+
+// A logged trajectory: its `series`, or in logs written before series had
+// names the `values` of one unnamed series.
+type LoggedTrajectory<T> = T &
+  ({ series: Series[] } | { values: (number | null)[] });
+
+function seriesOf<T>(logged: LoggedTrajectory<T>): T & { series: Series[] } {
+  if ("series" in logged) return logged;
+  const { values, ...rest } = logged;
+  return { ...rest, series: [{ name: null, values }] } as T & {
+    series: Series[];
+  };
+}
+
+// The observed series of a `run_started` event, in either form.
+function observedOf(observed: Series[] | (number | null)[] | null): Series[] {
+  if (!observed || observed.length === 0) return [];
+  const first = observed[0];
+  if (first === null || typeof first === "number")
+    return [{ name: null, values: observed as (number | null)[] }];
+  return observed as Series[];
+}
+
+// Looks up the series called `name` (null for the unnamed one).
+export function seriesNamed(
+  series: Series[],
+  name: string | null,
+): (number | null)[] | null {
+  return series.find((s) => s.name === name)?.values ?? null;
+}
+
+// Every series name the run has, observed ones first, then those only the
+// trajectories or projections carry, each once in order of appearance.
+export function seriesNames(run: RunState): (string | null)[] {
+  const names: (string | null)[] = [];
+  const add = (series: Series[]) => {
+    for (const s of series) if (!names.includes(s.name)) names.push(s.name);
+  };
+  add(run.observed);
+  for (const g of run.generations) {
+    for (const t of g.trajectories) add(t.series);
+    for (const t of g.rejected) add(t.series);
+  }
+  for (const p of run.projections)
+    for (const t of p.trajectories) add(t.series);
+  return names;
+}
 
 export function emptyRun(): RunState {
   return {
@@ -154,7 +216,7 @@ export function emptyRun(): RunState {
     nGenerations: 0,
     quantiles: null,
     params: [],
-    observed: null,
+    observed: [],
     generations: [],
     markers: [],
     projections: [],
@@ -198,7 +260,7 @@ export function applyEvent(state: RunState, event: RunEvent): RunState {
         nGenerations: event.n_generations,
         quantiles: event.quantiles,
         params: event.params,
-        observed: event.observed,
+        observed: observedOf(event.observed),
         markers: event.markers ?? [],
         status: "running",
       });
@@ -227,8 +289,8 @@ export function applyEvent(state: RunState, event: RunEvent): RunState {
       g.tolerance = event.stats.tolerance;
       g.stats = event.stats;
       g.particles = event.particles;
-      g.trajectories = event.trajectories;
-      g.rejected = event.rejected ?? [];
+      g.trajectories = event.trajectories.map(seriesOf);
+      g.rejected = (event.rejected ?? []).map(seriesOf);
       g.live = [];
       g.liveAccepted = event.stats.accepted;
       g.liveAttempts = event.stats.attempts;
@@ -263,7 +325,7 @@ export function applyEvent(state: RunState, event: RunEvent): RunState {
     case "projection": {
       const projection = {
         label: event.label,
-        trajectories: event.trajectories,
+        trajectories: event.trajectories.map(seriesOf),
       };
       const existing = state.projections.findIndex(
         (p) => p.label === event.label,

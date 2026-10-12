@@ -5,6 +5,8 @@ import {
   completedGenerations,
   currentGeneration,
   emptyRun,
+  seriesNamed,
+  seriesNames,
   priorLabel,
 } from "./run";
 
@@ -101,9 +103,14 @@ describe("applyLine", () => {
         rejected: [{ distance: 9, values: [7, 8] }],
       }),
     );
-    expect(s.generations[1]!.rejected).toEqual([
-      { distance: 9, values: [7, 8] },
+    // Logs written before series had names: one unnamed series.
+    expect(s.generations[0]!.trajectories).toEqual([
+      { particle: 0, series: [{ name: null, values: [1, 2] }] },
     ]);
+    expect(s.generations[1]!.rejected).toEqual([
+      { distance: 9, series: [{ name: null, values: [7, 8] }] },
+    ]);
+    expect(s.observed).toEqual([{ name: null, values: [1, 2] }]);
 
     applyLine(s, JSON.stringify({ type: "run_finished", generations: 1 }));
     expect(s.status).toBe("finished");
@@ -236,7 +243,58 @@ describe("projections", () => {
     applyLine(s, projection("baseline", 3));
     expect(s.status).toBe("finished");
     expect(s.projections.map((p) => p.label)).toEqual(["baseline", "control"]);
-    expect(s.projections[0]!.trajectories[0]!.values).toEqual([3, null]);
+    expect(s.projections[0]!.trajectories[0]!.series).toEqual([
+      { name: null, values: [3, null] },
+    ]);
+  });
+});
+
+describe("series", () => {
+  const cases = { name: "cases", values: [1, 2] };
+  const deaths = { name: "deaths", values: [0, 1] };
+
+  it("are read by name from the run's events", () => {
+    const s = emptyRun();
+    applyLine(
+      s,
+      JSON.stringify({
+        ...JSON.parse(started),
+        observed: [cases, deaths],
+      }),
+    );
+    applyLine(
+      s,
+      JSON.stringify({
+        type: "generation_completed",
+        generation: 0,
+        stats: { ...stats, tolerance: null },
+        particles,
+        trajectories: [{ particle: 0, series: [cases, deaths] }],
+        rejected: [{ distance: 9, series: [cases, deaths] }],
+      }),
+    );
+    applyLine(
+      s,
+      JSON.stringify({
+        type: "projection",
+        label: "p",
+        trajectories: [
+          { weight: 1, series: [cases, { name: "beds", values: [5] }] },
+        ],
+      }),
+    );
+    expect(s.observed).toEqual([cases, deaths]);
+    expect(s.generations[0]!.trajectories[0]!.series).toEqual([cases, deaths]);
+    expect(seriesNamed(s.observed, "deaths")).toEqual([0, 1]);
+    expect(seriesNamed(s.observed, "beds")).toBeNull();
+    expect(seriesNames(s)).toEqual(["cases", "deaths", "beds"]);
+  });
+
+  it("are none when the log has no observed series", () => {
+    const s = emptyRun();
+    applyLine(s, JSON.stringify({ ...JSON.parse(started), observed: null }));
+    expect(s.observed).toEqual([]);
+    expect(seriesNames(s)).toEqual([]);
   });
 });
 

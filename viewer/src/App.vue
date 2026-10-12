@@ -18,7 +18,10 @@ import {
   currentGeneration,
   emptyRun,
   priorLabel,
+  seriesNamed,
+  seriesNames,
   type Generation,
+  type Series,
   type RunState,
 } from "./run";
 import {
@@ -218,7 +221,9 @@ onScopeDispose(() => stopTail?.());
 // Target data, priors, and projections each get a tab once the log has them.
 const tabs = computed(() => {
   const extra = [
-    ...(run.observed ? [{ value: "target", label: "Target data" }] : []),
+    ...(run.observed.length > 0
+      ? [{ value: "target", label: "Target data" }]
+      : []),
     ...(run.params.some((p) => p.prior)
       ? [{ value: "priors", label: "Priors" }]
       : []),
@@ -354,11 +359,43 @@ const liveFraction = computed(() => {
   return Math.min(1, g.liveAccepted / run.nParticles);
 });
 
+// The run's series, observed ones first: every series chart is drawn once
+// per entry. `key` is for v-for, since the one unnamed series has no name.
+const seriesList = computed(() =>
+  seriesNames(run).map((name) => ({ name, key: name ?? "" })),
+);
+
+function observedOf(name: string | null): (number | null)[] | null {
+  return seriesNamed(run.observed, name);
+}
+
+// The `name` series of each trajectory, for those that have it.
+function seriesValues<T extends { series: Series[] }>(
+  trajectories: T[],
+  name: string | null,
+): { trajectory: T; values: (number | null)[] }[] {
+  const out: { trajectory: T; values: (number | null)[] }[] = [];
+  for (const trajectory of trajectories) {
+    const values = seriesNamed(trajectory.series, name);
+    if (values) out.push({ trajectory, values });
+  }
+  return out;
+}
+
+// A chart title that names the series it shows, when the series has a name:
+// "Trajectories: ..." or "Cases trajectories: ...".
+function titled(base: string, name: string | null, rest: string): string {
+  return name === null
+    ? `${base}: ${rest}`
+    : `${name} ${base.toLowerCase()}: ${rest}`;
+}
+
 // Weighted median and central 50% and 90% bands of `trajectories`, with the
 // observed series on top. Shared by the projections and the credible-interval
 // view of the trajectories.
 function bandChart(
   trajectories: { weight: number; values: (number | null)[] }[],
+  observed: (number | null)[] | null,
   title: string,
   filename: string,
 ) {
@@ -384,20 +421,20 @@ function bandChart(
         legend: "Median",
       },
     ];
-    if (run.observed) {
+    if (observed) {
       series.push({
-        ...finitePoints(run.observed),
+        ...finitePoints(observed),
         color: palette.value.observed,
         strokeWidth: 2.5,
         dots: true,
         legend: "Observed",
       });
     }
-    const observed = run.observed;
     return {
       title,
       filename,
       bands,
+      observed,
       csv: () =>
         columnsToCsv([
           { header: "index", values: x },
@@ -431,43 +468,69 @@ function bandChart(
   }
 }
 
-// One band chart per projection, so the fitted window and the projected
-// part read together.
+// One band chart per projection and series, so the fitted window and the
+// projected part read together.
 const projectionCharts = computed(() =>
-  run.projections.map((projection) => ({
-    label: projection.label,
-    ...bandChart(
-      projection.trajectories,
-      `Projection: ${projection.label} (${projection.trajectories.length} particles)`,
-      fileStem(run.id, "projection", projection.label),
-    ),
-  })),
+  run.projections.flatMap((projection) =>
+    seriesList.value.flatMap(({ name, key }) => {
+      const trajectories = seriesValues(projection.trajectories, name).map(
+        ({ trajectory, values }) => ({ weight: trajectory.weight, values }),
+      );
+      if (trajectories.length === 0) return [];
+      const label =
+        name === null ? projection.label : `${projection.label}, ${name}`;
+      return [
+        {
+          key: `${projection.label}/${key}`,
+          ...bandChart(
+            trajectories,
+            observedOf(name),
+            `Projection: ${label} (${trajectories.length} particles)`,
+            fileStem(run.id, "projection", projection.label, name),
+          ),
+        },
+      ];
+    }),
+  ),
 );
 
 // The credible intervals of each generation in view, weighted by the
-// trajectories' particles: one chart per generation, never pooled.
-const intervalCharts = computed(() => {
+// trajectories' particles: a row per series with one chart per generation,
+// never pooled.
+const intervalGroups = computed(() => {
   const gens = allGenerations.value
     ? completed.value
     : shownGeneration.value
       ? [shownGeneration.value]
       : [];
-  return gens
-    .filter((g) => g.trajectories.length > 0)
-    .map((g) => {
+  return seriesList.value.flatMap(({ name, key }) => {
+    const charts = gens.flatMap((g) => {
+      const trajectories = seriesValues(g.trajectories, name).map(
+        ({ trajectory, values }) => ({
+          weight: g.particles[trajectory.particle]?.weight ?? 0,
+          values,
+        }),
+      );
+      if (trajectories.length === 0) return [];
       const label = generationLabel(g);
-      return {
-        key: g.generation,
-        ...bandChart(
-          g.trajectories.map((t) => ({
-            weight: g.particles[t.particle]?.weight ?? 0,
-            values: t.values,
-          })),
-          `Credible intervals: ${label}, ${g.trajectories.length} of ${g.particles.length} accepted particles`,
-          fileStem(run.id, "intervals", label),
-        ),
-      };
+      return [
+        {
+          key: g.generation,
+          ...bandChart(
+            trajectories,
+            observedOf(name),
+            titled(
+              "Credible intervals",
+              name,
+              `${label}, ${trajectories.length} of ${g.particles.length} accepted particles`,
+            ),
+            fileStem(run.id, "intervals", name, label),
+          ),
+        },
+      ];
     });
+    return charts.length > 0 ? [{ key, charts }] : [];
+  });
 });
 
 // The run's markers as every series chart draws them: fixed vertical lines
@@ -481,98 +544,147 @@ const chartMarkers = computed(() =>
   })),
 );
 
-// The observed series the distance fits, on its own.
-const targetChart = computed(() => {
-  const observed = run.observed;
-  if (!observed) return null;
-  const points = finitePoints(observed);
-  return {
-    points: points.x.length,
-    table: { index: points.x, observed: points.data },
-    title: "Target data",
-    filename: fileStem(run.id, "target"),
-    series: [
-      {
-        ...points,
-        color: palette.value.observed,
-        strokeWidth: 2,
-        dots: true,
-        legend: "Observed",
-      },
-    ],
-    csv: () =>
-      columnsToCsv([
-        { header: "index", values: points.x },
-        { header: "observed", values: points.data },
-      ]),
-  };
+// The observed series the distance fits, each on its own.
+const targetCharts = computed(() =>
+  run.observed.map((observed) => {
+    const points = finitePoints(observed.values);
+    return {
+      key: observed.name ?? "",
+      name: observed.name,
+      points: points.x.length,
+      title:
+        observed.name === null
+          ? "Target data"
+          : `Target data: ${observed.name}`,
+      filename: fileStem(run.id, "target", observed.name),
+      series: [
+        {
+          ...points,
+          color: palette.value.observed,
+          strokeWidth: 2,
+          dots: true,
+          legend: "Observed",
+        },
+      ],
+      csv: () =>
+        columnsToCsv([
+          { header: "index", values: points.x },
+          { header: observed.name ?? "observed", values: points.data },
+        ]),
+    };
+  }),
+);
+
+// Every observed series side by side, one column each.
+const targetTable = computed(() => {
+  if (run.observed.length === 0) return null;
+  const length = Math.max(...run.observed.map((s) => s.values.length));
+  const index = Array.from({ length }, (_, i) => i);
+  const data: Record<string, (number | string)[]> = { index };
+  const columnConfig: Record<
+    string,
+    { label: string; align?: "right"; width: "small" }
+  > = { index: { label: "Index", width: "small" } };
+  run.observed.forEach((s, i) => {
+    const column = `s${i}`;
+    data[column] = index.map((j) => s.values[j] ?? "");
+    columnConfig[column] = {
+      label: s.name ?? "Observed",
+      align: "right",
+      width: "small",
+    };
+  });
+  return { data, columnConfig, filename: fileStem(run.id, "target") };
 });
 
+// One series of the trajectories in view: the logged accepted and rejected
+// trajectories' values for it, and the observed series of its name.
 interface TrajectoryView {
   label: string;
+  // The series shown; null for the one unnamed series.
+  name: string | null;
+  observed: (number | null)[] | null;
   nParticles: number;
   // `name` is the series' CSV column.
-  trajectories: { name: string; values: number[] }[];
-  rejected: { name: string; values: number[] }[];
+  trajectories: { name: string; values: (number | null)[] }[];
+  rejected: { name: string; values: (number | null)[] }[];
 }
 
 function trajectoryViewOf(
   gens: Generation[],
   label: string,
   prefixed: boolean,
+  name: string | null,
 ): TrajectoryView {
   const prefix = (g: Generation) => (prefixed ? `gen_${g.generation}_` : "");
   return {
     label,
+    name,
+    observed: observedOf(name),
     nParticles: gens.reduce((n, g) => n + g.particles.length, 0),
     trajectories: gens.flatMap((g) =>
-      g.trajectories.map((t) => ({
-        name: `${prefix(g)}particle_${t.particle}`,
-        values: t.values,
+      seriesValues(g.trajectories, name).map(({ trajectory, values }) => ({
+        name: `${prefix(g)}particle_${trajectory.particle}`,
+        values,
       })),
     ),
     rejected: gens.flatMap((g) =>
-      g.rejected.map((t, i) => ({
+      seriesValues(g.rejected, name).map(({ values }, i) => ({
         name: `${prefix(g)}rejected_${i}`,
-        values: t.values,
+        values,
       })),
     ),
   };
 }
 
-// Everything the trajectories section draws: the shown generation, or every
+// What the trajectories section draws: the shown generation, or every
 // completed generation together.
-const trajectoryView = computed<TrajectoryView | null>(() => {
+const trajectoryGens = computed(() => {
   if (allGenerations.value)
     return completed.value.length > 0
-      ? trajectoryViewOf(completed.value, "All generations", true)
+      ? { gens: completed.value, label: "All generations", prefixed: true }
       : null;
   const g = shownGeneration.value;
-  return g ? trajectoryViewOf([g], generationLabel(g), false) : null;
+  return g ? { gens: [g], label: generationLabel(g), prefixed: false } : null;
 });
 
-// One chart per view: all of it, or one generation each when faceted.
-const trajectoryCharts = computed(() => {
-  const all = trajectoryView.value;
-  if (!all) return [];
-  const views =
-    allGenerations.value && facet.value
-      ? completed.value.map((g) =>
-          trajectoryViewOf([g], generationLabel(g), false),
-        )
-      : [all];
-  return views.map((view) => ({
-    key: view.label,
-    view,
-    series: trajectorySeries(view),
-    ...trajectoryDownload(view),
-    // Facets are narrow, so their titles are short.
-    ...(views.length > 1
-      ? {
-          title: `${view.label}: ${view.trajectories.length} accepted, ${view.rejected.length} rejected`,
-        }
-      : {}),
-  }));
+// The first series' view of it, which stands for all of them where only the
+// counts matter: the subtitle, the legend, and whether there is anything.
+const trajectoryView = computed<TrajectoryView | null>(() => {
+  const g = trajectoryGens.value;
+  if (!g) return null;
+  const first = seriesList.value[0];
+  return trajectoryViewOf(g.gens, g.label, g.prefixed, first?.name ?? null);
+});
+
+// A row per series: one chart of all of it, or one per generation when
+// faceted, on the series' shared axes.
+const trajectoryGroups = computed(() => {
+  const g = trajectoryGens.value;
+  if (!g) return [];
+  return seriesList.value.map(({ name, key }) => {
+    const all = trajectoryViewOf(g.gens, g.label, g.prefixed, name);
+    const frame = trajectoryFrame(all);
+    const views =
+      allGenerations.value && facet.value
+        ? g.gens.map((gen) =>
+            trajectoryViewOf([gen], generationLabel(gen), false, name),
+          )
+        : [all];
+    const charts = views.map((view) => ({
+      key: view.label,
+      view,
+      series: trajectorySeries(view, frame),
+      ...trajectoryDownload(view),
+      // Facets are narrow, so their titles are short.
+      ...(views.length > 1
+        ? {
+            title: `${name === null ? "" : `${name}, `}${view.label}: ${view.trajectories.length} accepted, ${view.rejected.length} rejected`,
+          }
+        : {}),
+    }));
+    return { key, charts };
+  });
 });
 
 const ALL_GENERATIONS = "all";
@@ -598,19 +710,19 @@ const generationChoice = computed({
   },
 });
 
-// The extent of the series that are turned on, across the whole section.
+// The extent of the series that are turned on, across a series' whole view.
 // The legend's key series span it, so facets share axes that fit what is
 // showing. With everything off it falls back to the full extent, which keeps
 // the legend there to turn things back on.
-const trajectoryFrame = computed(() => {
-  const g = trajectoryView.value;
+type Frame = { xMax: number; yMin: number; yMax: number } | null;
+
+function trajectoryFrame(g: TrajectoryView): Frame {
   const collect = (onlyShown: boolean) => {
     const all: (number | null)[][] = [];
-    if (run.observed && (showObserved.value || !onlyShown))
-      all.push(run.observed);
-    if (g && (showAccepted.value || !onlyShown))
+    if (g.observed && (showObserved.value || !onlyShown)) all.push(g.observed);
+    if (showAccepted.value || !onlyShown)
       for (const t of g.trajectories) all.push(t.values);
-    if (g && (showRejected.value || !onlyShown))
+    if (showRejected.value || !onlyShown)
       for (const t of g.rejected) all.push(t.values);
     return all;
   };
@@ -626,9 +738,9 @@ const trajectoryFrame = computed(() => {
     yMax = Math.max(yMax, hi);
   }
   return yMin <= yMax ? { xMax, yMin, yMax } : null;
-});
+}
 
-function trajectorySeries(g: TrajectoryView) {
+function trajectorySeries(g: TrajectoryView, frame: Frame) {
   const series: {
     x: number[];
     data: number[];
@@ -638,7 +750,6 @@ function trajectorySeries(g: TrajectoryView) {
     legend?: string;
     showInTooltip?: boolean;
   }[] = [];
-  const frame = trajectoryFrame.value;
   if (frame) {
     // The chart reads the hovered index off its first series, so the first
     // one has every index: the key series below have only their two ends.
@@ -668,8 +779,7 @@ function trajectorySeries(g: TrajectoryView) {
   if (showRejected.value) {
     for (const t of g.rejected) {
       series.push({
-        x: t.values.map((_, i) => i),
-        data: t.values,
+        ...finitePoints(t.values),
         color: palette.value.rejected,
         strokeWidth: 1,
         dots: false,
@@ -680,8 +790,7 @@ function trajectorySeries(g: TrajectoryView) {
   if (showAccepted.value) {
     for (const t of g.trajectories) {
       series.push({
-        x: t.values.map((_, i) => i),
-        data: t.values,
+        ...finitePoints(t.values),
         color: palette.value.trajectory,
         strokeWidth: 1,
         dots: false,
@@ -689,9 +798,9 @@ function trajectorySeries(g: TrajectoryView) {
       });
     }
   }
-  if (run.observed && showObserved.value) {
+  if (g.observed && showObserved.value) {
     series.push({
-      ...finitePoints(run.observed),
+      ...finitePoints(g.observed),
       color: palette.value.observed,
       strokeWidth: 2.5,
       dots: true,
@@ -705,7 +814,7 @@ function trajectorySeries(g: TrajectoryView) {
 const hasTrajectoryData = computed(() => {
   const g = trajectoryView.value;
   return (
-    !!run.observed ||
+    run.observed.length > 0 ||
     (g !== null && g.trajectories.length + g.rejected.length > 0)
   );
 });
@@ -714,7 +823,7 @@ const hasTrajectoryData = computed(() => {
 const trajectoryLegend = computed(() => {
   const g = trajectoryView.value;
   const items = [];
-  if (run.observed)
+  if (run.observed.length > 0)
     items.push({
       label: "Observed",
       color: palette.value.observed,
@@ -783,7 +892,7 @@ function onLegendHover(event: MouseEvent) {
 // Strike through the labels of hidden items. Set on the elements so exported
 // images show it too.
 watch(
-  [trajectoryCharts, trajectoryChart],
+  [trajectoryGroups, trajectoryChart],
   () => {
     for (const chart of document.querySelectorAll("[data-trajectory-chart]"))
       for (const text of legendLabels(chart)) {
@@ -798,15 +907,15 @@ watch(
 );
 
 function trajectoryDownload(g: TrajectoryView) {
-  const observed = showObserved.value ? run.observed : null;
+  const observed = showObserved.value ? g.observed : null;
   const trajectories = showAccepted.value ? g.trajectories : [];
   const rejected = showRejected.value ? g.rejected : [];
   let length = observed?.length ?? 0;
   for (const t of trajectories) length = Math.max(length, t.values.length);
   for (const t of rejected) length = Math.max(length, t.values.length);
   return {
-    title: `Trajectories: ${trajectorySubtitle(g)}`,
-    filename: fileStem(run.id, "trajectories", g.label),
+    title: titled("Trajectories", g.name, trajectorySubtitle(g)),
+    filename: fileStem(run.id, "trajectories", g.name, g.label),
     csv: () =>
       columnsToCsv([
         { header: "index", values: Array.from({ length }, (_, i) => i) },
@@ -1155,8 +1264,11 @@ function tipRows(): TipRows & {
   };
 }
 
-function observedAt(index: number): number | null {
-  const v = run.observed?.[index];
+function observedAt(
+  observed: (number | null)[] | null,
+  index: number,
+): number | null {
+  const v = observed?.[index];
   return v !== undefined && v !== null && Number.isFinite(v) ? v : null;
 }
 
@@ -1166,9 +1278,13 @@ function range(lo: number, hi: number): string {
 
 // A band chart's tooltip at `index`: the observed point, the median, and
 // each band's bounds.
-function bandTipRows(bands: number[][], index: number): TipRows {
+function bandTipRows(
+  chart: { bands: number[][]; observed: (number | null)[] | null },
+  index: number,
+): TipRows {
+  const { bands } = chart;
   const rows = tipRows();
-  const observed = observedAt(index);
+  const observed = observedAt(chart.observed, index);
   if (observed !== null)
     rows.push("Observed", palette.value.observed, observed);
   const q = (k: number) => bands[k]![index] ?? NaN;
@@ -1182,13 +1298,13 @@ function bandTipRows(bands: number[][], index: number): TipRows {
 // accepted and rejected trajectories showing, their median and range there.
 function trajectoryTipRows(view: TrajectoryView, index: number): TipRows {
   const rows = tipRows();
-  const observed = observedAt(index);
+  const observed = observedAt(view.observed, index);
   if (showObserved.value && observed !== null)
     rows.push("Observed", palette.value.observed, observed);
   const spread = (
     label: string,
     color: string,
-    trajectories: { values: number[] }[],
+    trajectories: { values: (number | null)[] }[],
   ) => {
     const s = spreadAt(
       trajectories.map((t) => t.values),
@@ -1513,68 +1629,72 @@ function fmt(x: number, digits = 3): string {
           </p>
           <div
             v-if="trajectoryMode === 'intervals'"
-            :class="{ grid: intervalCharts.length > 1 }"
+            class="cells"
             data-testid="intervals"
           >
-            <div v-for="chart in intervalCharts" :key="chart.key" class="cell">
-              <LineChart
-                zoom
-                :series="chart.series"
-                :areas="chart.areas"
-                :markers="chartMarkers"
-                :height="intervalCharts.length > 1 ? 300 : 260"
-                x-label="Index"
-                y-label="Value"
-                :y-scale-type="yScaleType"
-                :filename="chart.filename"
-                :data-export-name="chart.filename"
-                :title="chart.title"
-                :csv="chart.csv"
-                tooltip-trigger="hover"
-              >
-                <template #tooltip="t">
-                  <ChartTip
-                    :heading="`Index ${t.index}`"
-                    v-bind="bandTipRows(chart.bands, t.index)"
-                  />
-                </template>
-              </LineChart>
+            <div
+              v-for="group in intervalGroups"
+              :key="group.key"
+              :class="{ grid: group.charts.length > 1 }"
+            >
+              <div v-for="chart in group.charts" :key="chart.key" class="cell">
+                <LineChart
+                  zoom
+                  :series="chart.series"
+                  :areas="chart.areas"
+                  :markers="chartMarkers"
+                  :height="group.charts.length > 1 ? 300 : 260"
+                  x-label="Index"
+                  y-label="Value"
+                  :y-scale-type="yScaleType"
+                  :filename="chart.filename"
+                  :data-export-name="chart.filename"
+                  :title="chart.title"
+                  :csv="chart.csv"
+                  tooltip-trigger="hover"
+                >
+                  <template #tooltip="t">
+                    <ChartTip
+                      :heading="`Index ${t.index}`"
+                      v-bind="bandTipRows(chart, t.index)"
+                    />
+                  </template>
+                </LineChart>
+              </div>
             </div>
           </div>
-          <div
-            v-else
-            ref="trajectoryChart"
-            :class="{ grid: trajectoryCharts.length > 1 }"
-          >
+          <div v-else ref="trajectoryChart" class="cells">
             <div
-              v-for="chart in trajectoryCharts"
-              :key="chart.key"
-              class="cell"
+              v-for="group in trajectoryGroups"
+              :key="group.key"
+              :class="{ grid: group.charts.length > 1 }"
             >
-              <LineChart
-                zoom
-                :series="chart.series"
-                :markers="chartMarkers"
-                :height="trajectoryCharts.length > 1 ? 300 : 260"
-                x-label="Index"
-                y-label="Value"
-                :y-scale-type="yScaleType"
-                :filename="chart.filename"
-                :data-export-name="chart.filename"
-                :title="chart.title"
-                :csv="chart.csv"
-                tooltip-trigger="hover"
-                data-trajectory-chart
-                @click="onLegendClick"
-                @mousemove="onLegendHover"
-              >
-                <template #tooltip="t">
-                  <ChartTip
-                    :heading="`Index ${t.index}`"
-                    v-bind="trajectoryTipRows(chart.view, t.index)"
-                  />
-                </template>
-              </LineChart>
+              <div v-for="chart in group.charts" :key="chart.key" class="cell">
+                <LineChart
+                  zoom
+                  :series="chart.series"
+                  :markers="chartMarkers"
+                  :height="group.charts.length > 1 ? 300 : 260"
+                  x-label="Index"
+                  y-label="Value"
+                  :y-scale-type="yScaleType"
+                  :filename="chart.filename"
+                  :data-export-name="chart.filename"
+                  :title="chart.title"
+                  :csv="chart.csv"
+                  tooltip-trigger="hover"
+                  data-trajectory-chart
+                  @click="onLegendClick"
+                  @mousemove="onLegendHover"
+                >
+                  <template #tooltip="t">
+                    <ChartTip
+                      :heading="`Index ${t.index}`"
+                      v-bind="trajectoryTipRows(chart.view, t.index)"
+                    />
+                  </template>
+                </LineChart>
+              </div>
             </div>
           </div>
         </section>
@@ -1778,43 +1898,45 @@ function fmt(x: number, digits = 3): string {
       </div>
 
       <section
-        v-if="targetChart"
+        v-if="targetTable"
         class="tab-panel"
         :class="{ parked: activeTab !== 'target' }"
         :inert="activeTab !== 'target'"
         data-testid="target"
       >
-        <p class="muted">{{ targetChart.points }} observed points</p>
-        <LineChart
-          zoom
-          :series="targetChart.series"
-          :markers="chartMarkers"
-          :height="220"
-          x-label="Index"
-          y-label="Value"
-          :y-scale-type="yScaleType"
-          :filename="targetChart.filename"
-          :data-export-name="targetChart.filename"
-          :title="targetChart.title"
-          :csv="targetChart.csv"
-          tooltip-trigger="hover"
-        >
-          <template #tooltip="t">
-            <ChartTip
-              :heading="`Index ${t.index}`"
-              :values="t.values"
-              :labels="['Observed']"
-            />
-          </template>
-        </LineChart>
+        <div v-for="chart in targetCharts" :key="chart.key">
+          <p class="muted">
+            <template v-if="chart.name !== null">{{ chart.name }}: </template
+            >{{ chart.points }} observed points
+          </p>
+          <LineChart
+            zoom
+            :series="chart.series"
+            :markers="chartMarkers"
+            :height="220"
+            x-label="Index"
+            y-label="Value"
+            :y-scale-type="yScaleType"
+            :filename="chart.filename"
+            :data-export-name="chart.filename"
+            :title="chart.title"
+            :csv="chart.csv"
+            tooltip-trigger="hover"
+          >
+            <template #tooltip="t">
+              <ChartTip
+                :heading="`Index ${t.index}`"
+                :values="t.values"
+                :labels="['Observed']"
+              />
+            </template>
+          </LineChart>
+        </div>
         <DataTable
           class="target-table"
-          :data="targetChart.table"
-          :column-config="{
-            index: { label: 'Index', width: 'small' },
-            observed: { label: 'Observed', align: 'right', width: 'small' },
-          }"
-          :filename="targetChart.filename"
+          :data="targetTable.data"
+          :column-config="targetTable.columnConfig"
+          :filename="targetTable.filename"
         />
       </section>
 
@@ -1846,7 +1968,7 @@ function fmt(x: number, digits = 3): string {
         <div class="cells">
           <div
             v-for="chart in projectionCharts"
-            :key="chart.label"
+            :key="chart.key"
             class="projection"
           >
             <LineChart
@@ -1867,7 +1989,7 @@ function fmt(x: number, digits = 3): string {
               <template #tooltip="t">
                 <ChartTip
                   :heading="`Index ${t.index}`"
-                  v-bind="bandTipRows(chart.bands, t.index)"
+                  v-bind="bandTipRows(chart, t.index)"
                 />
               </template>
             </LineChart>

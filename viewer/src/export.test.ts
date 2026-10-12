@@ -78,10 +78,10 @@ describe("particlesCsv", () => {
 describe("trajectoriesCsv", () => {
   it("writes one row per trajectory value", () => {
     expect(trajectoriesCsv(finishedRun()).split("\n")).toEqual([
-      "generation,particle,index,value",
-      "0,1,0,3",
-      "0,1,1,4",
-      "1,0,0,5",
+      "generation,particle,series,index,value",
+      "0,1,,0,3",
+      "0,1,,1,4",
+      "1,0,,0,5",
     ]);
   });
 });
