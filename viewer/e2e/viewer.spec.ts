@@ -483,6 +483,26 @@ test.describe("without file handles", () => {
       return chart.locator(".chart-tip");
     };
 
+    // Trajectories summarize the lines under the cursor; the credible
+    // intervals give each band's bounds. Both inside the fitted window.
+    const trajectories = await hover("trajectories", 0.1);
+    await expect(trajectories).toContainText("Observed");
+    await expect(trajectories).toContainText("Accepted median");
+    await expect(trajectories).toContainText("Accepted range");
+    await expect(trajectories).toContainText("Rejected range");
+    await page
+      .getByTestId("trajectories")
+      .getByRole("button", { name: "Credible intervals" })
+      .click();
+    const intervals = await hover("trajectories", 0.1);
+    await expect(intervals).toContainText("Median");
+    await expect(intervals).toContainText("50% band");
+    await expect(intervals).toContainText("90% band");
+    await page
+      .getByTestId("trajectories")
+      .getByRole("button", { name: "Trajectories" })
+      .click();
+
     const overlay = await hover("overlays", 0.45);
     await expect(overlay).toContainText("Density at r0 =");
     await expect(overlay).toContainText("Prior");

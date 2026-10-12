@@ -4,6 +4,7 @@ import {
   finitePoints,
   parameterSummaries,
   quantileBands,
+  spreadAt,
   weightedCorrelation,
   weightedQuantiles,
   weightedSummary,
@@ -125,5 +126,28 @@ describe("finitePoints", () => {
       x: [2, 4],
       data: [3, 5],
     });
+  });
+});
+
+describe("spreadAt", () => {
+  const series = [
+    [1, 4, 9],
+    [3, 2],
+    [2, null, 1],
+    [NaN, 8, NaN],
+  ];
+
+  it("summarizes the finite values at an index", () => {
+    expect(spreadAt(series, 0)).toEqual({ n: 3, min: 1, median: 2, max: 3 });
+    expect(spreadAt(series, 1)).toEqual({ n: 3, min: 2, median: 4, max: 8 });
+  });
+
+  it("takes the midpoint median of an even count", () => {
+    expect(spreadAt(series, 2)).toEqual({ n: 2, min: 1, median: 5, max: 9 });
+  });
+
+  it("is null past every series", () => {
+    expect(spreadAt(series, 3)).toBeNull();
+    expect(spreadAt([], 0)).toBeNull();
   });
 });

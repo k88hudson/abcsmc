@@ -1,14 +1,16 @@
 <script setup lang="ts">
 // Tooltip body for a chart's #tooltip slot: a heading and one named row per
 // series, since the default tooltip shows values without their series names.
+// A string value (a range, say) is shown as given.
 defineProps<{
   heading: string;
-  values: { value: number; color: string; seriesIndex: number }[];
+  values: { value: number | string; color: string; seriesIndex: number }[];
   labels: (string | undefined)[];
   digits?: number;
 }>();
 
-function format(x: number, digits: number): string {
+function format(x: number | string, digits: number): string {
+  if (typeof x === "string") return x;
   if (!Number.isFinite(x)) return "–";
   return Number.isInteger(x) ? String(x) : x.toFixed(digits);
 }

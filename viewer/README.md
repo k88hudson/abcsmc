@@ -61,7 +61,9 @@ and the run's distance provides `Distance::observed`.
   summaries behind the Posteriors table, and the weighted correlation behind
   the pairwise scatters.
 - `src/ChartTip.vue`: the hover tooltip body shared by every chart, a heading
-  plus one named row per series.
+  plus one named row per series. The trajectory and band charts build their
+  own rows: the observed point, the median and range of the accepted and
+  rejected trajectories at that index, or the median and each band's bounds.
 - `src/App.vue`: the page, in tabs: Calibration, and Target data, Priors, and
   Projections when the log has them. Charts are `LineChart` and `BarChart` from
   `cfasim-ui`.

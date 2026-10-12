@@ -41,6 +41,7 @@ import {
   normalizedWeights,
   parameterSummaries,
   quantileBands,
+  spreadAt,
   weightedCorrelation,
   weightedHistogram,
   weightedKde,
@@ -396,6 +397,7 @@ function bandChart(
     return {
       title,
       filename,
+      bands,
       csv: () =>
         columnsToCsv([
           { header: "index", values: x },
@@ -561,6 +563,7 @@ const trajectoryCharts = computed(() => {
       : [all];
   return views.map((view) => ({
     key: view.label,
+    view,
     series: trajectorySeries(view),
     ...trajectoryDownload(view),
     // Facets are narrow, so their titles are short.
@@ -635,10 +638,20 @@ function trajectorySeries(g: TrajectoryView) {
     legend?: string;
     showInTooltip?: boolean;
   }[] = [];
-  // One zero-width series per legend item: it puts the item in the chart's
-  // legend (so exports carry it) whether or not its lines are drawn.
   const frame = trajectoryFrame.value;
   if (frame) {
+    // The chart reads the hovered index off its first series, so the first
+    // one has every index: the key series below have only their two ends.
+    series.push({
+      x: Array.from({ length: frame.xMax + 1 }, (_, i) => i),
+      data: new Array<number>(frame.xMax + 1).fill(frame.yMin),
+      color: "transparent",
+      strokeWidth: 0,
+      dots: false,
+      showInTooltip: false,
+    });
+    // One zero-width series per legend item: it puts the item in the chart's
+    // legend (so exports carry it) whether or not its lines are drawn.
     for (const item of trajectoryLegend.value) {
       series.push({
         x: [0, frame.xMax],
@@ -1120,14 +1133,76 @@ function binHeading(paramIndex: number, category: string): string {
   return `${param.name} ${param.kind === "int" ? "=" : "≈"} ${category}`;
 }
 
-// Projection tooltips: the chart reports the nearest observed point even
-// past the end of the observed series, so drop it there. Observed is series 1.
-function withinObserved<T extends { seriesIndex: number }>(
-  values: T[],
-  index: number,
-): T[] {
-  const n = run.observed?.length ?? 0;
-  return values.filter((v) => v.seriesIndex !== 1 || index < n);
+// Tooltip rows built here rather than taken from the chart, which reports
+// the nearest point of each series even where the series has none.
+interface TipRows {
+  values: { seriesIndex: number; color: string; value: number | string }[];
+  labels: string[];
+}
+
+function tipRows(): TipRows & {
+  push: (label: string, color: string, value: number | string) => void;
+} {
+  const values: TipRows["values"] = [];
+  const labels: string[] = [];
+  return {
+    values,
+    labels,
+    push: (label, color, value) => {
+      values.push({ seriesIndex: values.length, color, value });
+      labels.push(label);
+    },
+  };
+}
+
+function observedAt(index: number): number | null {
+  const v = run.observed?.[index];
+  return v !== undefined && v !== null && Number.isFinite(v) ? v : null;
+}
+
+function range(lo: number, hi: number): string {
+  return `${fmt(lo)} – ${fmt(hi)}`;
+}
+
+// A band chart's tooltip at `index`: the observed point, the median, and
+// each band's bounds.
+function bandTipRows(bands: number[][], index: number): TipRows {
+  const rows = tipRows();
+  const observed = observedAt(index);
+  if (observed !== null)
+    rows.push("Observed", palette.value.observed, observed);
+  const q = (k: number) => bands[k]![index] ?? NaN;
+  rows.push("Median", palette.value.median, q(2));
+  rows.push("50% band", palette.value.band, range(q(1), q(3)));
+  rows.push("90% band", palette.value.band, range(q(0), q(4)));
+  return { values: rows.values, labels: rows.labels };
+}
+
+// The trajectories tooltip at `index`: the observed point and, for the
+// accepted and rejected trajectories showing, their median and range there.
+function trajectoryTipRows(view: TrajectoryView, index: number): TipRows {
+  const rows = tipRows();
+  const observed = observedAt(index);
+  if (showObserved.value && observed !== null)
+    rows.push("Observed", palette.value.observed, observed);
+  const spread = (
+    label: string,
+    color: string,
+    trajectories: { values: number[] }[],
+  ) => {
+    const s = spreadAt(
+      trajectories.map((t) => t.values),
+      index,
+    );
+    if (!s) return;
+    rows.push(`${label} median`, color, s.median);
+    rows.push(`${label} range`, color, range(s.min, s.max));
+  };
+  if (showAccepted.value)
+    spread("Accepted", solid(palette.value.trajectory), view.trajectories);
+  if (showRejected.value)
+    spread("Rejected", solid(palette.value.rejected), view.rejected);
+  return { values: rows.values, labels: rows.labels };
 }
 
 function selectGeneration(generation: number) {
@@ -1460,8 +1535,7 @@ function fmt(x: number, digits = 3): string {
                 <template #tooltip="t">
                   <ChartTip
                     :heading="`Index ${t.index}`"
-                    :values="withinObserved(t.values, t.index)"
-                    :labels="chart.series.map((s) => s.legend)"
+                    v-bind="bandTipRows(chart.bands, t.index)"
                   />
                 </template>
               </LineChart>
@@ -1489,10 +1563,18 @@ function fmt(x: number, digits = 3): string {
                 :data-export-name="chart.filename"
                 :title="chart.title"
                 :csv="chart.csv"
+                tooltip-trigger="hover"
                 data-trajectory-chart
                 @click="onLegendClick"
                 @mousemove="onLegendHover"
-              />
+              >
+                <template #tooltip="t">
+                  <ChartTip
+                    :heading="`Index ${t.index}`"
+                    v-bind="trajectoryTipRows(chart.view, t.index)"
+                  />
+                </template>
+              </LineChart>
             </div>
           </div>
         </section>
@@ -1785,8 +1867,7 @@ function fmt(x: number, digits = 3): string {
               <template #tooltip="t">
                 <ChartTip
                   :heading="`Index ${t.index}`"
-                  :values="withinObserved(t.values, t.index)"
-                  :labels="chart.series.map((s) => s.legend)"
+                  v-bind="bandTipRows(chart.bands, t.index)"
                 />
               </template>
             </LineChart>

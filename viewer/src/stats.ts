@@ -316,3 +316,29 @@ export function axisScale(
   const power = [...String(exponent)].map((c) => SUPERSCRIPTS[c] ?? c).join("");
   return { factor: 10 ** -exponent, label: `${name} (×10${power})` };
 }
+
+// The finite values the series have at `index`: how many there are and their
+// smallest, median, and largest. Null when none has one.
+export function spreadAt(
+  series: (number | null)[][],
+  index: number,
+): { n: number; min: number; median: number; max: number } | null {
+  const values: number[] = [];
+  for (const s of series) {
+    const v = s[index];
+    if (v !== null && v !== undefined && Number.isFinite(v)) values.push(v);
+  }
+  if (values.length === 0) return null;
+  values.sort((a, b) => a - b);
+  const mid = values.length >> 1;
+  const median =
+    values.length % 2 === 1
+      ? values[mid]!
+      : (values[mid - 1]! + values[mid]!) / 2;
+  return {
+    n: values.length,
+    min: values[0]!,
+    median,
+    max: values[values.length - 1]!,
+  };
+}
