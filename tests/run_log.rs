@@ -3,8 +3,8 @@
 
 use abcsmc::{
     CalibrationModel, Draw as _, IntPrior, JsonlObserver, Marker, Posterior, Priors,
-    ProjectedTrajectory, Projection, RealPrior, RunLog, Series, append_markers, define_priors,
-    distance_to, run_quantiles_with,
+    ProjectedTrajectory, Projection, RealPrior, RunLog, Series, TargetRange, append_markers,
+    append_ranges, define_priors, distance_to, run_quantiles_with,
 };
 use rand::{SeedableRng, rngs::StdRng};
 
@@ -52,7 +52,8 @@ fn with_run<T>(
         &[12.0],
         |output: &f64, observed: &[f64]| (output - observed[0]).abs(),
     )
-    .with_markers([Marker::labelled(0.0, "scored")]);
+    .with_markers([Marker::labelled(0.0, "scored")])
+    .with_ranges([TargetRange::new(0.0, 10.0, 14.0).with_value(12.0)]);
     let generations =
         run_quantiles_with(&Product, &distance, &[0.5, 0.2], 100, "product fit", &log);
     drop(log);
@@ -78,6 +79,10 @@ fn a_log_reads_back_as_the_run_that_wrote_it() {
                 Marker::labelled(3.0, "model")
             ],
             "the distance's markers, then the model's"
+        );
+        assert_eq!(
+            log.ranges,
+            vec![TargetRange::new(0.0, 10.0, 14.0).with_value(12.0)]
         );
         let names: Vec<(&str, bool)> = log
             .params
@@ -201,6 +206,30 @@ fn appended_markers_replace_by_label_and_add_the_rest() {
                 Marker::labelled(3.0, "model"),
                 Marker::at(2.0),
                 Marker::labelled(4.0, "change"),
+            ]
+        );
+    });
+}
+
+#[test]
+fn appended_ranges_replace_by_series_and_x_and_add_the_rest() {
+    with_run("ranges", |path, _| {
+        append_ranges(
+            path,
+            &[
+                TargetRange::new(0.0, 11.0, 13.0),
+                TargetRange::on("cases", 0.0, 1.0, 2.0),
+            ],
+        )
+        .unwrap();
+        append_ranges(path, &[TargetRange::new(1.0, 0.0, 1.0)]).unwrap();
+        let log = RunLog::read(path).unwrap();
+        assert_eq!(
+            log.ranges,
+            vec![
+                TargetRange::new(0.0, 11.0, 13.0),
+                TargetRange::on("cases", 0.0, 1.0, 2.0),
+                TargetRange::new(1.0, 0.0, 1.0),
             ]
         );
     });

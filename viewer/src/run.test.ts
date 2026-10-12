@@ -329,6 +329,35 @@ describe("markers", () => {
   });
 });
 
+describe("ranges", () => {
+  it("come with the run and appended ones replace by series and x", () => {
+    const s = emptyRun();
+    applyLine(s, started);
+    expect(s.ranges).toEqual([]);
+    applyLine(
+      s,
+      JSON.stringify({
+        ...JSON.parse(started),
+        ranges: [{ x: 1, lower: 2, upper: 3, value: null, series: "cases" }],
+      }),
+    );
+    applyLine(
+      s,
+      JSON.stringify({
+        type: "ranges",
+        ranges: [
+          { x: 1, lower: 4, upper: 5, value: 4.5, series: "cases" },
+          { x: 1, lower: 0, upper: 1, value: null, series: null },
+        ],
+      }),
+    );
+    expect(s.ranges).toEqual([
+      { x: 1, lower: 4, upper: 5, value: 4.5, series: "cases" },
+      { x: 1, lower: 0, upper: 1, value: null, series: null },
+    ]);
+  });
+});
+
 describe("priorLabel", () => {
   it("prints the family and its parameters by name", () => {
     expect(priorLabel({ type: "Uniform", a: 0.5, b: 3 })).toBe(

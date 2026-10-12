@@ -95,6 +95,19 @@ export interface Marker {
   label: string | null;
 }
 
+// A range one series is fitted to at an x position, drawn as a whisker on
+// that series' charts: the floor and ceiling the distance scores against,
+// and a point estimate when there is one. Logged with the run, and added to
+// by `ranges` events appended after it.
+export interface TargetRange {
+  x: number;
+  lower: number;
+  upper: number;
+  value: number | null;
+  // The series the range is on; null for the unnamed one.
+  series: string | null;
+}
+
 export interface RunState {
   id: string | null;
   description: string | null;
@@ -107,6 +120,7 @@ export interface RunState {
   // The observed series the distance fits; empty when it gives none.
   observed: Series[];
   markers: Marker[];
+  ranges: TargetRange[];
   generations: Generation[];
   projections: Projection[];
   status: "empty" | "running" | "finished";
@@ -131,6 +145,8 @@ export type RunEvent =
       observed: Series[] | (number | null)[] | null;
       // Absent in logs written before markers existed.
       markers?: Marker[];
+      // Absent in logs written before ranges existed.
+      ranges?: TargetRange[];
     }
   | { type: "generation_started"; generation: number; tolerance: number | null }
   | {
@@ -157,7 +173,8 @@ export type RunEvent =
       label: string;
       trajectories: LoggedTrajectory<{ weight: number }>[];
     }
-  | { type: "markers"; markers: Marker[] };
+  | { type: "markers"; markers: Marker[] }
+  | { type: "ranges"; ranges: TargetRange[] };
 
 // A logged trajectory: its `series`, or in logs written before series had
 // names the `values` of one unnamed series.
@@ -219,6 +236,7 @@ export function emptyRun(): RunState {
     observed: [],
     generations: [],
     markers: [],
+    ranges: [],
     projections: [],
     status: "empty",
     lines: 0,
@@ -262,6 +280,7 @@ export function applyEvent(state: RunState, event: RunEvent): RunState {
         params: event.params,
         observed: observedOf(event.observed),
         markers: event.markers ?? [],
+        ranges: event.ranges ?? [],
         status: "running",
       });
       break;
@@ -319,6 +338,17 @@ export function applyEvent(state: RunState, event: RunEvent): RunState {
             : state.markers.findIndex((m) => m.label === marker.label);
         if (existing >= 0) state.markers[existing] = marker;
         else state.markers.push(marker);
+      }
+      break;
+    }
+    // A range replaces an earlier one on the same series at the same x.
+    case "ranges": {
+      for (const range of event.ranges) {
+        const existing = state.ranges.findIndex(
+          (r) => r.series === range.series && r.x === range.x,
+        );
+        if (existing >= 0) state.ranges[existing] = range;
+        else state.ranges.push(range);
       }
       break;
     }

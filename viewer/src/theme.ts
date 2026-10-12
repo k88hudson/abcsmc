@@ -15,6 +15,8 @@ export interface ChartPalette {
   band: string;
   bandOpacity: [number, number];
   marker: string;
+  // Target range whiskers.
+  range: string;
 }
 
 const light: ChartPalette = {
@@ -30,6 +32,7 @@ const light: ChartPalette = {
   band: "#2563eb",
   bandOpacity: [0.15, 0.3],
   marker: "#64748b",
+  range: "#c2410c",
 };
 
 const dark: ChartPalette = {
@@ -45,6 +48,7 @@ const dark: ChartPalette = {
   band: "#3987e5",
   bandOpacity: [0.2, 0.4],
   marker: "#94a3b8",
+  range: "#fb923c",
 };
 
 export function chartPalette(isDark: boolean): ChartPalette {

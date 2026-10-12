@@ -23,6 +23,8 @@ mod particle;
 pub use particle::*;
 mod marker;
 pub use marker::*;
+mod range;
+pub use range::*;
 mod series;
 pub use series::*;
 mod observer;

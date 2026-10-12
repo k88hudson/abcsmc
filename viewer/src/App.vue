@@ -23,6 +23,7 @@ import {
   type Generation,
   type Series,
   type RunState,
+  type TargetRange,
 } from "./run";
 import {
   canRead,
@@ -66,6 +67,7 @@ const logScale = ref(false);
 const showAccepted = ref(true);
 const showRejected = ref(true);
 const showObserved = ref(true);
+const showRanges = ref(true);
 const allGenerations = ref(false);
 const tab = ref("calibration");
 const facet = ref(false);
@@ -395,11 +397,12 @@ function titled(base: string, name: string | null, rest: string): string {
 // view of the trajectories.
 function bandChart(
   trajectories: { weight: number; values: (number | null)[] }[],
-  observed: (number | null)[] | null,
+  name: string | null,
   title: string,
   filename: string,
 ) {
   {
+    const observed = observedOf(name);
     const { x, bands } = quantileBands(
       trajectories,
       [0.05, 0.25, 0.5, 0.75, 0.95],
@@ -433,8 +436,10 @@ function bandChart(
     return {
       title,
       filename,
+      name,
       bands,
       observed,
+      intervals: rangeIntervals(name),
       csv: () =>
         columnsToCsv([
           { header: "index", values: x },
@@ -484,7 +489,7 @@ const projectionCharts = computed(() =>
           key: `${projection.label}/${key}`,
           ...bandChart(
             trajectories,
-            observedOf(name),
+            name,
             `Projection: ${label} (${trajectories.length} particles)`,
             fileStem(run.id, "projection", projection.label, name),
           ),
@@ -518,7 +523,7 @@ const intervalGroups = computed(() => {
           key: g.generation,
           ...bandChart(
             trajectories,
-            observedOf(name),
+            name,
             titled(
               "Credible intervals",
               name,
@@ -544,13 +549,45 @@ const chartMarkers = computed(() =>
   })),
 );
 
+// The target ranges of one series as its charts draw them: a whisker from
+// the floor to the ceiling at each position, with a dot where the range has
+// a point estimate.
+function rangeIntervals(name: string | null) {
+  return run.ranges
+    .filter((r) => r.series === name)
+    .map((r) => ({
+      x: r.x,
+      lower: r.lower,
+      upper: r.upper,
+      value: r.value ?? undefined,
+    }));
+}
+
+const intervalStyle = computed(() => ({
+  color: palette.value.range,
+  lineWidth: 1.5,
+  capWidth: 6,
+}));
+
+function rangeAt(name: string | null, index: number): TargetRange | null {
+  return run.ranges.find((r) => r.series === name && r.x === index) ?? null;
+}
+
 // The observed series the distance fits, each on its own.
 const targetCharts = computed(() =>
   run.observed.map((observed) => {
     const points = finitePoints(observed.values);
+    const ranges = rangeIntervals(observed.name);
+    const bound = (pick: (r: TargetRange) => number) =>
+      points.x.map((x) => {
+        const r = rangeAt(observed.name, x);
+        return r ? pick(r) : null;
+      });
     return {
       key: observed.name ?? "",
       name: observed.name,
+      values: observed.values,
+      intervals: ranges,
       points: points.x.length,
       title:
         observed.name === null
@@ -570,6 +607,12 @@ const targetCharts = computed(() =>
         columnsToCsv([
           { header: "index", values: points.x },
           { header: observed.name ?? "observed", values: points.data },
+          ...(ranges.length > 0
+            ? [
+                { header: "range_lower", values: bound((r) => r.lower) },
+                { header: "range_upper", values: bound((r) => r.upper) },
+              ]
+            : []),
         ]),
     };
   }),
@@ -593,6 +636,17 @@ const targetTable = computed(() => {
       align: "right",
       width: "small",
     };
+    if (!run.ranges.some((r) => r.series === s.name)) return;
+    for (const bound of ["lower", "upper"] as const) {
+      data[`${column}_${bound}`] = index.map(
+        (j) => rangeAt(s.name, j)?.[bound] ?? "",
+      );
+      columnConfig[`${column}_${bound}`] = {
+        label: `${s.name ?? "Observed"} ${bound}`,
+        align: "right",
+        width: "small",
+      };
+    }
   });
   return { data, columnConfig, filename: fileStem(run.id, "target") };
 });
@@ -675,6 +729,7 @@ const trajectoryGroups = computed(() => {
       key: view.label,
       view,
       series: trajectorySeries(view, frame),
+      intervals: showRanges.value ? rangeIntervals(name) : [],
       ...trajectoryDownload(view),
       // Facets are narrow, so their titles are short.
       ...(views.length > 1
@@ -724,6 +779,9 @@ function trajectoryFrame(g: TrajectoryView): Frame {
       for (const t of g.trajectories) all.push(t.values);
     if (showRejected.value || !onlyShown)
       for (const t of g.rejected) all.push(t.values);
+    if (showRanges.value || !onlyShown)
+      for (const r of run.ranges)
+        if (r.series === g.name) all.push([r.lower, r.upper]);
     return all;
   };
   const shown = collect(true);
@@ -840,6 +898,12 @@ const trajectoryLegend = computed(() => {
       label: "Rejected",
       color: solid(palette.value.rejected),
       shown: showRejected,
+    });
+  if (run.ranges.length > 0)
+    items.push({
+      label: "Target range",
+      color: palette.value.range,
+      shown: showRanges,
     });
   return items;
 });
@@ -1276,10 +1340,32 @@ function range(lo: number, hi: number): string {
   return `${fmt(lo)} – ${fmt(hi)}`;
 }
 
+function pushRange(rows: ReturnType<typeof tipRows>, r: TargetRange | null) {
+  if (r)
+    rows.push("Target range", palette.value.range, range(r.lower, r.upper));
+}
+
+// The target data tooltip at `index`: the observed point and its range.
+function targetTipRows(
+  chart: { name: string | null; values: (number | null)[] },
+  index: number,
+): TipRows {
+  const rows = tipRows();
+  const observed = observedAt(chart.values, index);
+  if (observed !== null)
+    rows.push("Observed", palette.value.observed, observed);
+  pushRange(rows, rangeAt(chart.name, index));
+  return { values: rows.values, labels: rows.labels };
+}
+
 // A band chart's tooltip at `index`: the observed point, the median, and
 // each band's bounds.
 function bandTipRows(
-  chart: { bands: number[][]; observed: (number | null)[] | null },
+  chart: {
+    name: string | null;
+    bands: number[][];
+    observed: (number | null)[] | null;
+  },
   index: number,
 ): TipRows {
   const { bands } = chart;
@@ -1287,6 +1373,7 @@ function bandTipRows(
   const observed = observedAt(chart.observed, index);
   if (observed !== null)
     rows.push("Observed", palette.value.observed, observed);
+  pushRange(rows, rangeAt(chart.name, index));
   const q = (k: number) => bands[k]![index] ?? NaN;
   rows.push("Median", palette.value.median, q(2));
   rows.push("50% band", palette.value.band, range(q(1), q(3)));
@@ -1301,6 +1388,7 @@ function trajectoryTipRows(view: TrajectoryView, index: number): TipRows {
   const observed = observedAt(view.observed, index);
   if (showObserved.value && observed !== null)
     rows.push("Observed", palette.value.observed, observed);
+  if (showRanges.value) pushRange(rows, rangeAt(view.name, index));
   const spread = (
     label: string,
     color: string,
@@ -1643,6 +1731,8 @@ function fmt(x: number, digits = 3): string {
                   :series="chart.series"
                   :areas="chart.areas"
                   :markers="chartMarkers"
+                  :intervals="chart.intervals"
+                  :interval-style="intervalStyle"
                   :height="group.charts.length > 1 ? 300 : 260"
                   x-label="Index"
                   y-label="Value"
@@ -1674,6 +1764,8 @@ function fmt(x: number, digits = 3): string {
                   zoom
                   :series="chart.series"
                   :markers="chartMarkers"
+                  :intervals="chart.intervals"
+                  :interval-style="intervalStyle"
                   :height="group.charts.length > 1 ? 300 : 260"
                   x-label="Index"
                   y-label="Value"
@@ -1913,6 +2005,8 @@ function fmt(x: number, digits = 3): string {
             zoom
             :series="chart.series"
             :markers="chartMarkers"
+            :intervals="chart.intervals"
+            :interval-style="intervalStyle"
             :height="220"
             x-label="Index"
             y-label="Value"
@@ -1926,8 +2020,7 @@ function fmt(x: number, digits = 3): string {
             <template #tooltip="t">
               <ChartTip
                 :heading="`Index ${t.index}`"
-                :values="t.values"
-                :labels="['Observed']"
+                v-bind="targetTipRows(chart, t.index)"
               />
             </template>
           </LineChart>
@@ -1976,6 +2069,8 @@ function fmt(x: number, digits = 3): string {
               :series="chart.series"
               :areas="chart.areas"
               :markers="chartMarkers"
+              :intervals="chart.intervals"
+              :interval-style="intervalStyle"
               :height="280"
               x-label="Index"
               y-label="Value"

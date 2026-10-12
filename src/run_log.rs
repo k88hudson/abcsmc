@@ -78,9 +78,10 @@ mod reader {
 
     use super::{ProjectedTrajectory, Projection};
     use crate::marker::merge_markers;
+    use crate::range::merge_ranges;
     use crate::{
-        Draw, GenerationStats, Marker, ParamMeta, ParamPrior, Params, Population, Series, Value,
-        resample_indices,
+        Draw, GenerationStats, Marker, ParamMeta, ParamPrior, Params, Population, Series,
+        TargetRange, Value, resample_indices,
     };
 
     /// A run log read back from disk: what the run declared, every completed
@@ -100,6 +101,9 @@ mod reader {
         pub observed: Vec<Series>,
         /// The run's markers, with any appended `markers` events merged in.
         pub markers: Vec<Marker>,
+        /// The ranges the distance fits series to, with any appended
+        /// `ranges` events merged in.
+        pub ranges: Vec<TargetRange>,
         /// The completed generations. A generation that was under way when
         /// the log was read is not among them.
         pub generations: Vec<LoggedGeneration>,
@@ -163,6 +167,29 @@ mod reader {
             Marker {
                 x: spec.x,
                 label: spec.label,
+            }
+        }
+    }
+
+    #[derive(Deserialize)]
+    struct RangeSpec {
+        x: f64,
+        lower: f64,
+        upper: f64,
+        #[serde(default)]
+        value: Option<f64>,
+        #[serde(default)]
+        series: Option<String>,
+    }
+
+    impl From<RangeSpec> for TargetRange {
+        fn from(spec: RangeSpec) -> Self {
+            TargetRange {
+                x: spec.x,
+                lower: spec.lower,
+                upper: spec.upper,
+                value: spec.value,
+                series: spec.series,
             }
         }
     }
@@ -263,9 +290,14 @@ mod reader {
             observed: Option<SeriesListSpec>,
             #[serde(default)]
             markers: Vec<MarkerSpec>,
+            #[serde(default)]
+            ranges: Vec<RangeSpec>,
         },
         Markers {
             markers: Vec<MarkerSpec>,
+        },
+        Ranges {
+            ranges: Vec<RangeSpec>,
         },
         RunResumed {},
         GenerationCompleted {
@@ -312,6 +344,7 @@ mod reader {
                         params,
                         observed,
                         markers,
+                        ranges,
                     } => {
                         let params = params
                             .into_iter()
@@ -338,6 +371,7 @@ mod reader {
                             params,
                             observed: series_of(observed),
                             markers: markers.into_iter().map(Marker::from).collect(),
+                            ranges: ranges.into_iter().map(TargetRange::from).collect(),
                             generations: Vec::new(),
                             finished: false,
                             projections: Vec::new(),
@@ -352,6 +386,10 @@ mod reader {
                             Event::Markers { markers } => merge_markers(
                                 &mut log.markers,
                                 markers.into_iter().map(Marker::from).collect(),
+                            ),
+                            Event::Ranges { ranges } => merge_ranges(
+                                &mut log.ranges,
+                                ranges.into_iter().map(TargetRange::from).collect(),
                             ),
                             Event::GenerationCompleted {
                                 generation,

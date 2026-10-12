@@ -7,8 +7,8 @@ use std::path::Path;
 
 use abcsmc::{
     CalibrationModel, Distance, Generation, JsonlObserver, Marker, Particle, Priors, Series,
-    StdoutObserver, define_priors, discrete_uniform_prior, distance, exponential_prior,
-    run_quantiles_with,
+    StdoutObserver, TargetRange, define_priors, discrete_uniform_prior, distance,
+    exponential_prior, run_quantiles_with,
 };
 use rand::{SeedableRng, rngs::StdRng};
 use serde::Serialize;
@@ -20,7 +20,10 @@ use crate::renewal::{Parameters, Population, RenewalModel, RenewalOutput, Transm
 const FITTED_WEEKS: usize = 6;
 const FITTED_DAYS: usize = 7 * FITTED_WEEKS;
 /// Which distance to fit with: change this to try another.
-const METRIC: Metric = Metric::DailyL1;
+const METRIC: Metric = Metric::DailyRange;
+/// How far above the observed count the target range of [`Metric::DailyRange`]
+/// reaches, as a fraction of it.
+const RANGE_ABOVE: f64 = 0.25;
 const N_PARTICLES: usize = 2_000;
 /// Each generation's tolerance, as a quantile of the prior's distances.
 const QUANTILES: [f64; 4] = [0.1, 0.05, 0.01, 0.005];
@@ -105,6 +108,10 @@ enum Metric {
     WeeklyL1,
     /// Difference in total cases: outbreak size only, ignoring timing.
     TotalCases,
+    /// Day-by-day distance outside a range from the observed count up to
+    /// [`RANGE_ABOVE`] more: a floor the simulation should stay at or above,
+    /// with some room over it.
+    DailyRange,
 }
 
 /// The run's distance over two series of the fitted days: one [`Metric`] on
@@ -124,6 +131,7 @@ impl Distance<RenewalOutput> for IncidenceDistance {
             Metric::DailyL1 => distance::l1(simulated, observed),
             Metric::WeeklyL1 => distance::l1(&weekly(simulated), &weekly(observed)),
             Metric::TotalCases => distance::total_difference(simulated, observed),
+            Metric::DailyRange => distance::l1_outside(simulated, observed, &self.range_ceiling()),
         };
         daily + distance::mean_absolute_error(&cumulative(simulated), &cumulative(observed))
     }
@@ -133,6 +141,9 @@ impl Distance<RenewalOutput> for IncidenceDistance {
             Metric::DailyL1 => "L1 distance between daily symptomatic incidence",
             Metric::WeeklyL1 => "L1 distance between weekly symptomatic incidence",
             Metric::TotalCases => "Absolute difference in total symptomatic incidence",
+            Metric::DailyRange => {
+                "Distance of daily symptomatic incidence outside the range from the observed count to 25% above it"
+            }
         };
         Some(format!(
             "{metric} over the first {} days, plus the mean absolute error of cumulative incidence",
@@ -155,6 +166,31 @@ impl Distance<RenewalOutput> for IncidenceDistance {
             markers.extend((7..days).step_by(7).map(|day| Marker::at(day as f64)));
         }
         markers
+    }
+
+    /// Under the range metric, each fitted day's target range.
+    fn ranges(&self) -> Vec<TargetRange> {
+        let Metric::DailyRange = self.metric else {
+            return Vec::new();
+        };
+        self.observed
+            .iter()
+            .zip(self.range_ceiling())
+            .enumerate()
+            .map(|(day, (&floor, ceiling))| {
+                TargetRange::on(DAILY, day as f64, floor as f64, ceiling)
+            })
+            .collect()
+    }
+}
+
+impl IncidenceDistance {
+    /// The top of each fitted day's target range under [`Metric::DailyRange`].
+    fn range_ceiling(&self) -> Vec<f64> {
+        self.observed
+            .iter()
+            .map(|&count| count as f64 * (1.0 + RANGE_ABOVE))
+            .collect()
     }
 }
 

@@ -12,8 +12,10 @@ use std::time::Duration;
 
 use crate::marker::push_markers;
 use crate::platform::{Bar, Instant};
+use crate::range::push_ranges;
 use crate::{
-    CalibrationModel, Distance, Draw, Generation, Marker, ParamPrior, Params, Series, Value,
+    CalibrationModel, Distance, Draw, Generation, Marker, ParamPrior, Params, Series, TargetRange,
+    Value,
 };
 
 /// What a run declares before its first generation.
@@ -34,6 +36,8 @@ pub struct RunMeta {
     /// Positions to mark on the trajectories: the distance's, then the
     /// model's.
     pub markers: Vec<Marker>,
+    /// The ranges the distance fits series to, if it exposes any.
+    pub ranges: Vec<TargetRange>,
 }
 
 #[derive(Clone, Debug)]
@@ -76,6 +80,7 @@ impl RunMeta {
             params,
             observed: distance.observed_series(),
             markers: [distance.markers(), model.markers()].concat(),
+            ranges: distance.ranges(),
         }
     }
 }
@@ -258,7 +263,9 @@ impl<M: CalibrationModel> RunObserver<M> for StdoutObserver {
 ///   the distance's observed series, name a string or `null`; empty when it
 ///   has none), `markers` (`[{x, label}]`, label a string or `null`: the
 ///   positions the distance and model mark on the trajectories, see
-///   [`Marker`]).
+///   [`Marker`]), `ranges` (`[{x, lower, upper, value, series}]`, value a
+///   number or `null`, series a string or `null`: the ranges the distance
+///   fits series to, see [`TargetRange`]).
 /// - `generation_started`: `generation`, `tolerance` (`null` when infinite).
 /// - `progress`: `generation`, running `accepted` and `attempts` counts, and
 ///   `batch`, the `{params, distance}` of every particle accepted since the
@@ -283,6 +290,9 @@ impl<M: CalibrationModel> RunObserver<M> for StdoutObserver {
 ///   second `generation_started`.
 /// - `markers`: `markers` (`[{x, label}]`), appended after the run by
 ///   [`append_markers`]; merged into the run's by label.
+/// - `ranges`: `ranges` (`[{x, lower, upper, value, series}]`), appended
+///   after the run by [`append_ranges`]; one on the same series at the same
+///   x replaces the run's.
 ///
 /// Integer parameters are written as JSON integers, real ones as numbers.
 pub struct JsonlObserver {
@@ -457,6 +467,8 @@ impl<M: CalibrationModel> RunObserver<M> for JsonlObserver {
         push_series(&mut line, &meta.observed);
         line.push_str(r#","markers":"#);
         push_markers(&mut line, &meta.markers);
+        line.push_str(r#","ranges":"#);
+        push_ranges(&mut line, &meta.ranges);
         line.push('}');
         self.write_line(&line);
     }
@@ -646,7 +658,7 @@ pub(crate) fn push_series(out: &mut String, series: &[Series]) {
     out.push(']');
 }
 
-fn push_opt_str(out: &mut String, s: Option<&str>) {
+pub(crate) fn push_opt_str(out: &mut String, s: Option<&str>) {
     match s {
         Some(s) => push_str(out, s),
         None => out.push_str("null"),

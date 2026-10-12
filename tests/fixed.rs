@@ -5,8 +5,8 @@ use std::collections::HashSet;
 
 use abcsmc::{
     CalibrationModel, Distance, Draw, Generation, IntPrior, JsonlObserver, Marker, Params, Priors,
-    RealPrior, Series, Silent, define_priors, distance_to, run, run_quantiles, run_quantiles_with,
-    run_with,
+    RealPrior, Series, Silent, TargetRange, define_priors, distance_to, run, run_quantiles,
+    run_quantiles_with, run_with,
 };
 use rand::{Rng, SeedableRng, rngs::StdRng};
 
@@ -300,7 +300,8 @@ fn jsonl_log_records_the_whole_run() {
         &[5.0, 5.0],
         |output: &f64, observed: &[f64]| (output - observed[0]).abs(),
     )
-    .with_markers([Marker::labelled(1.0, "scored"), Marker::at(0.5)]);
+    .with_markers([Marker::labelled(1.0, "scored"), Marker::at(0.5)])
+    .with_ranges([TargetRange::new(1.0, 4.0, 6.0).with_value(5.0)]);
     let generations = run_quantiles_with(
         &TracedModel,
         &distance,
@@ -341,6 +342,10 @@ fn jsonl_log_records_the_whole_run() {
     assert_eq!(
         started[0]["markers"],
         serde_json::json!([{"x": 1.0, "label": "scored"}, {"x": 0.5, "label": null}])
+    );
+    assert_eq!(
+        started[0]["ranges"],
+        serde_json::json!([{"x": 1.0, "lower": 4.0, "upper": 6.0, "value": 5.0, "series": null}])
     );
 
     let gen_started = of_type("generation_started");

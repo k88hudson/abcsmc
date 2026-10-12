@@ -1,4 +1,4 @@
-import { expect, test } from "@playwright/test";
+import { expect, test, type Locator } from "@playwright/test";
 import { readFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 import { strFromU8, unzipSync } from "fflate";
@@ -134,6 +134,55 @@ test.describe("without file handles", () => {
     await expect(projections.locator(".line-chart-marker")).toHaveCount(
       2 * (await projections.locator(".line-chart-wrapper").count()),
     );
+  });
+
+  test("target ranges are drawn as whiskers on the series they fit", async ({
+    page,
+  }) => {
+    await page.goto("/");
+    await page.getByLabel("Load run.jsonl").setInputFiles(fixture);
+    await expect(page.getByTestId("status")).toHaveText("Finished");
+
+    // The fixture fits each of the 42 days' symptomatic incidence to a
+    // range, so only that series' chart gets whiskers.
+    const trajectories = page.getByTestId("trajectories");
+    const charts = trajectories.locator(".line-chart-wrapper");
+    await expect(charts).toHaveCount(2);
+    const whiskers = (chart: Locator) =>
+      chart.locator('[data-testid="interval"]');
+    await expect(whiskers(charts.nth(0))).toHaveCount(42);
+    await expect(whiskers(charts.nth(1))).toHaveCount(0);
+
+    // The legend item hides them, on every chart that has them.
+    const item = trajectories
+      .locator("svg text")
+      .getByText("Target range", { exact: true });
+    await expect(item).toHaveCount(2);
+    await item.first().click();
+    await expect(whiskers(trajectories)).toHaveCount(0);
+    await expect(item.first()).toHaveCSS(
+      "text-decoration-line",
+      "line-through",
+    );
+    await item.last().click();
+    await expect(whiskers(trajectories)).toHaveCount(42);
+
+    await page
+      .getByRole("group", { name: "View" })
+      .getByRole("button", { name: "Credible intervals" })
+      .click();
+    await expect(whiskers(page.getByTestId("intervals"))).toHaveCount(42);
+
+    await page.getByRole("tab", { name: "Target data" }).click();
+    const target = page.getByTestId("target");
+    await expect(whiskers(target)).toHaveCount(42);
+    await expect(target.locator("th")).toContainText([
+      /Symptomatic incidence lower/,
+      /Symptomatic incidence upper/,
+    ]);
+
+    await page.getByRole("tab", { name: "Projections" }).click();
+    await expect(whiskers(page.getByTestId("projections"))).toHaveCount(42 * 3);
   });
 
   test("a run under way says which generation it is on", async ({ page }) => {

@@ -15,8 +15,10 @@
 //!   scaled by length, so tolerances are comparable across window sizes.
 //! - [`total_difference`]: compares totals only, ignoring timing.
 //! - [`relative_l1`]: `l1` as a fraction of the observed total.
+//! - [`l1_outside`]: how far each point falls outside a range `[lower,
+//!   upper]`, summed; zero for a simulation inside every range.
 
-use crate::{Marker, Series};
+use crate::{Marker, Series, TargetRange};
 
 /// How far a simulated output is from the observed data. A particle is
 /// accepted when this is within the generation's tolerance.
@@ -56,6 +58,13 @@ pub trait Distance<O>: Sync {
     fn markers(&self) -> Vec<Marker> {
         Vec::new()
     }
+
+    /// The ranges series are fitted to, when the distance scores against a
+    /// floor and ceiling rather than a point, for viewers to draw as whiskers
+    /// over the trajectories. Not used by the engine.
+    fn ranges(&self) -> Vec<TargetRange> {
+        Vec::new()
+    }
 }
 
 impl<O, F: Fn(&O) -> f64 + Sync> Distance<O> for F {
@@ -68,6 +77,7 @@ impl<O, F: Fn(&O) -> f64 + Sync> Distance<O> for F {
 pub struct DistanceFn<F> {
     description: String,
     markers: Vec<Marker>,
+    ranges: Vec<TargetRange>,
     f: F,
 }
 
@@ -75,6 +85,12 @@ impl<F> DistanceFn<F> {
     /// Adds positions for viewers to mark, see [`Distance::markers`].
     pub fn with_markers(mut self, markers: impl IntoIterator<Item = Marker>) -> Self {
         self.markers.extend(markers);
+        self
+    }
+
+    /// Adds target ranges for viewers to draw, see [`Distance::ranges`].
+    pub fn with_ranges(mut self, ranges: impl IntoIterator<Item = TargetRange>) -> Self {
+        self.ranges.extend(ranges);
         self
     }
 }
@@ -87,6 +103,7 @@ where
     DistanceFn {
         description: description.into(),
         markers: Vec::new(),
+        ranges: Vec::new(),
         f,
     }
 }
@@ -103,6 +120,10 @@ impl<O, F: Fn(&O) -> f64 + Sync> Distance<O> for DistanceFn<F> {
     fn markers(&self) -> Vec<Marker> {
         self.markers.clone()
     }
+
+    fn ranges(&self) -> Vec<TargetRange> {
+        self.ranges.clone()
+    }
 }
 
 /// A distance to an observed series that it owns. Build one with
@@ -111,6 +132,7 @@ pub struct DistanceTo<B, F> {
     description: String,
     observed: Vec<B>,
     markers: Vec<Marker>,
+    ranges: Vec<TargetRange>,
     f: F,
 }
 
@@ -118,6 +140,12 @@ impl<B, F> DistanceTo<B, F> {
     /// Adds positions for viewers to mark, see [`Distance::markers`].
     pub fn with_markers(mut self, markers: impl IntoIterator<Item = Marker>) -> Self {
         self.markers.extend(markers);
+        self
+    }
+
+    /// Adds target ranges for viewers to draw, see [`Distance::ranges`].
+    pub fn with_ranges(mut self, ranges: impl IntoIterator<Item = TargetRange>) -> Self {
+        self.ranges.extend(ranges);
         self
     }
 }
@@ -151,6 +179,7 @@ where
         description: description.into(),
         observed: observed.to_vec(),
         markers: Vec::new(),
+        ranges: Vec::new(),
         f,
     }
 }
@@ -174,6 +203,10 @@ where
 
     fn markers(&self) -> Vec<Marker> {
         self.markers.clone()
+    }
+
+    fn ranges(&self) -> Vec<TargetRange> {
+        self.ranges.clone()
     }
 }
 
@@ -272,6 +305,36 @@ pub fn relative_l1<A: Numeric, B: Numeric>(simulated: &[A], observed: &[B]) -> f
         return 0.0;
     }
     distance / total(observed).abs()
+}
+
+/// Sum over points of the distance from the simulated value to the range
+/// `[lower, upper]` at that point: zero inside the range, otherwise how far
+/// below `lower` or above `upper` the value is. For fitting to ranges rather
+/// than points; a run's [`Distance::ranges`] can show the same ranges.
+pub fn l1_outside<A: Numeric, B: Numeric, C: Numeric>(
+    simulated: &[A],
+    lower: &[B],
+    upper: &[C],
+) -> f64 {
+    assert_eq!(
+        simulated.len(),
+        lower.len(),
+        "distance between series of different lengths"
+    );
+    assert_eq!(
+        simulated.len(),
+        upper.len(),
+        "distance between series of different lengths"
+    );
+    simulated
+        .iter()
+        .zip(lower)
+        .zip(upper)
+        .map(|((x, lo), hi)| {
+            let (x, lo, hi) = (x.to_f64(), lo.to_f64(), hi.to_f64());
+            (lo - x).max(x - hi).max(0.0)
+        })
+        .sum()
 }
 
 #[cfg(test)]
@@ -380,5 +443,14 @@ mod test {
     #[should_panic(expected = "different lengths")]
     fn root_mean_squared_error_against_an_empty_observation_panics() {
         root_mean_squared_error(&[1.0], &[0.0; 0]);
+    }
+
+    #[test]
+    fn l1_outside_counts_only_the_part_outside_each_range() {
+        let lower = [0.0, 3.0, 3.0, 4.0];
+        let upper = [0.5, 4.0, 3.0, 9.0];
+        // 0.5 above, 1 above, 1 below, inside.
+        assert_eq!(l1_outside(&SIMULATED, &lower, &upper), 2.5);
+        assert_eq!(l1_outside(&OBSERVED, &OBSERVED, &OBSERVED), 0.0);
     }
 }
