@@ -334,14 +334,16 @@ test.describe("without file handles", () => {
       section.locator("svg text").getByText(label, { exact: true });
     const item = (label: string) => items(label).first();
 
+    // Rejected starts off, struck through on every chart.
+    for (const i of [0, 1])
+      await expect(items("Rejected").nth(i)).toHaveCSS(
+        "text-decoration-line",
+        "line-through",
+      );
     await item("Rejected").click();
-    await expect(lines).toHaveCount(all - 40);
+    await expect(lines).toHaveCount(all + 40);
     await items("Accepted").nth(1).click();
-    await expect(lines).toHaveCount(all - 80);
-    // The axes fit what is left, the observed series.
-    expect(await texts()).not.toEqual(before);
-    await item("Rejected").click();
-    await expect(lines).toHaveCount(all - 40);
+    await expect(lines).toHaveCount(all);
 
     // Hidden items stay in the legend, struck through, on every chart.
     for (const i of [0, 1]) {
@@ -355,15 +357,18 @@ test.describe("without file handles", () => {
       );
     }
 
-    // With everything off the legend is still there to turn it back on.
+    // The axes fit what is left, the observed series.
     await item("Rejected").click();
+    await expect(lines).toHaveCount(all - 40);
+    expect(await texts()).not.toEqual(before);
+
+    // With everything off the legend is still there to turn it back on.
     await item("Observed").click();
     await expect(item("Observed")).toHaveCSS(
       "text-decoration-line",
       "line-through",
     );
-    for (const label of ["Observed", "Accepted", "Rejected"])
-      await item(label).click();
+    for (const label of ["Observed", "Accepted"]) await item(label).click();
     await expect(lines).toHaveCount(all);
     expect(await texts()).toEqual(before);
   });
@@ -390,9 +395,10 @@ test.describe("without file handles", () => {
       .locator("svg text")
       .getByText("Rejected", { exact: true });
 
-    await rejected.click();
-    await expect(lines).toHaveCount(all - 20);
     await expect(rejected).toHaveCSS("text-decoration-line", "line-through");
+    await rejected.click();
+    await expect(lines).toHaveCount(all + 20);
+    await expect(rejected).toHaveCSS("text-decoration-line", "none");
 
     await expanded.getByLabel("Collapse").click();
     await expect(expanded).toHaveCount(0);
@@ -401,7 +407,7 @@ test.describe("without file handles", () => {
         .locator("svg text")
         .getByText("Rejected", { exact: true })
         .first(),
-    ).toHaveCSS("text-decoration-line", "line-through");
+    ).toHaveCSS("text-decoration-line", "none");
   });
 
   test("the view switches between trajectories and credible intervals", async ({
@@ -668,7 +674,7 @@ test.describe("without file handles", () => {
     await expect(trajectories).toContainText("Observed");
     await expect(trajectories).toContainText("Accepted median");
     await expect(trajectories).toContainText("Accepted range");
-    await expect(trajectories).toContainText("Rejected range");
+    await expect(trajectories).not.toContainText("Rejected range");
     await page
       .getByTestId("trajectories")
       .getByRole("button", { name: "Credible intervals" })

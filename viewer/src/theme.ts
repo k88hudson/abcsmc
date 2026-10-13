@@ -7,6 +7,9 @@ export interface ChartPalette {
   overlapBlend: "multiply" | "screen";
   kde: string;
   observed: string;
+  // A halo in the surface colour round the observed dots, setting them apart
+  // from the trajectories under them.
+  observedOutline: string;
   trajectory: string;
   rejected: string;
   // Legend swatch of a series that is turned off.
@@ -27,6 +30,7 @@ const light: ChartPalette = {
   overlapBlend: "multiply",
   kde: "#dc2626",
   observed: "#14b8a6",
+  observedOutline: "var(--color-bg-0, #fff)",
   trajectory: "rgba(37, 99, 235, 0.16)",
   rejected: "rgba(220, 38, 38, 0.25)",
   legendOff: "rgba(100, 116, 139, 0.3)",
@@ -44,6 +48,7 @@ const dark: ChartPalette = {
   overlapBlend: "screen",
   kde: "#e66767",
   observed: "#2dd4bf",
+  observedOutline: "var(--color-bg-0, #1b1b1b)",
   trajectory: "rgba(96, 165, 250, 0.2)",
   rejected: "rgba(230, 103, 103, 0.3)",
   legendOff: "rgba(148, 163, 184, 0.3)",

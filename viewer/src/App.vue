@@ -85,7 +85,7 @@ const dragging = ref(false);
 const selectedGeneration = ref<number | null>(null);
 const logScale = ref(false);
 const showAccepted = ref(true);
-const showRejected = ref(true);
+const showRejected = ref(false);
 const showObserved = ref(true);
 const showRanges = ref(true);
 const allGenerations = ref(false);
@@ -469,6 +469,8 @@ function bandChart(
         color: palette.value.observed,
         strokeWidth: 2.5,
         dots: true,
+        dotRadius: OBSERVED_DOT,
+        dotStroke: palette.value.observedOutline,
         legend: "Observed",
       });
     }
@@ -602,6 +604,8 @@ function rangeIntervals(name: string | null) {
     .map((r) => ({ x: r.x, lower: r.lower, upper: r.upper }));
 }
 
+const OBSERVED_DOT = 3;
+
 const intervalStyle = computed(() => ({
   color: palette.value.range,
   lineWidth: 1.5,
@@ -640,6 +644,8 @@ const targetCharts = computed(() =>
           color: palette.value.observed,
           strokeWidth: 2,
           dots: true,
+          dotRadius: OBSERVED_DOT,
+          dotStroke: palette.value.observedOutline,
           legend: "Observed",
         },
       ],
@@ -902,6 +908,8 @@ function trajectorySeries(g: TrajectoryView, frame: Frame) {
       color: palette.value.observed,
       strokeWidth: 2.5,
       dots: true,
+      dotRadius: OBSERVED_DOT,
+      dotStroke: palette.value.observedOutline,
     });
   }
   return series;
