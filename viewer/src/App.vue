@@ -851,6 +851,8 @@ function trajectorySeries(g: TrajectoryView, frame: Frame) {
     color: string;
     strokeWidth: number;
     dots: boolean;
+    dotRadius?: number;
+    dotStroke?: string;
     legend?: string;
     showInTooltip?: boolean;
   }[] = [];
