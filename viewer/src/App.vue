@@ -595,23 +595,18 @@ const chartMarkers = computed(() =>
 );
 
 // The target ranges of one series as its charts draw them: a whisker from
-// the floor to the ceiling at each position, with a dot where the range has
-// a point estimate.
+// the floor to the ceiling at each position.
 function rangeIntervals(name: string | null) {
   return run.ranges
     .filter((r) => r.series === name)
-    .map((r) => ({
-      x: r.x,
-      lower: r.lower,
-      upper: r.upper,
-      value: r.value ?? undefined,
-    }));
+    .map((r) => ({ x: r.x, lower: r.lower, upper: r.upper }));
 }
 
 const intervalStyle = computed(() => ({
   color: palette.value.range,
   lineWidth: 1.5,
   capWidth: 6,
+  dot: false,
 }));
 
 function rangeAt(name: string | null, index: number): TargetRange | null {
