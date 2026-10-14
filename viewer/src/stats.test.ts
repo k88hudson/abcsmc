@@ -6,6 +6,7 @@ import {
   quantileBands,
   spreadAt,
   weightedCorrelation,
+  weightedMeans,
   weightedQuantiles,
   weightedSummary,
 } from "./stats";
@@ -42,6 +43,21 @@ describe("quantileBands", () => {
     expect(x).toEqual([0, 1, 2]);
     expect(bands[0]).toEqual([0, 10, 20]);
     expect(bands[1]).toEqual([2, 12, 20]);
+  });
+});
+
+describe("weightedMeans", () => {
+  it("weights each index over the trajectories that reach it", () => {
+    expect(
+      weightedMeans([
+        { weight: 0.75, values: [0, 10, 20] },
+        { weight: 0.25, values: [4, null] },
+      ]),
+    ).toEqual([1, 10, 20]);
+  });
+
+  it("is NaN where no trajectory has a value", () => {
+    expect(weightedMeans([{ weight: 1, values: [null] }])).toEqual([NaN]);
   });
 });
 

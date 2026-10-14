@@ -200,6 +200,44 @@ test.describe("without file handles", () => {
     );
   });
 
+  test("the Annotations toggle hides markers and target ranges everywhere", async ({
+    page,
+  }) => {
+    await page.goto("/");
+    await page.getByLabel("Load run.jsonl").setInputFiles(fixture);
+    await expect(page.getByTestId("status")).toHaveText("Finished");
+
+    const trajectories = page.getByTestId("trajectories");
+    await expect(trajectories.locator(".line-chart-marker")).toHaveCount(4);
+    await expect(trajectories.locator('[data-testid="interval"]')).toHaveCount(
+      42,
+    );
+    await page.getByLabel("Annotations").click();
+    await expect(trajectories.locator(".line-chart-marker")).toHaveCount(0);
+    await expect(trajectories.locator('[data-testid="interval"]')).toHaveCount(
+      0,
+    );
+    await expect(
+      trajectories
+        .locator("svg text")
+        .getByText("Target range", { exact: true }),
+    ).toHaveCount(0);
+
+    await page.getByRole("tab", { name: "Target data" }).click();
+    const target = page.getByTestId("target");
+    await expect(target.locator(".line-chart-marker")).toHaveCount(0);
+    await expect(target.locator('[data-testid="interval"]')).toHaveCount(0);
+    await page.getByRole("tab", { name: "Projections" }).click();
+    await expect(
+      page.getByTestId("projections").locator(".line-chart-marker"),
+    ).toHaveCount(0);
+
+    await page.getByLabel("Annotations").click();
+    await expect(
+      page.getByTestId("projections").locator(".line-chart-marker"),
+    ).not.toHaveCount(0);
+  });
+
   test("target ranges are drawn as whiskers on the series they fit", async ({
     page,
   }) => {
@@ -430,7 +468,7 @@ test.describe("without file handles", () => {
       "Cumulative symptomatic incidence credible intervals: Gen 4",
     );
     await expect(
-      intervals.locator("svg text").getByText("Median", { exact: true }),
+      intervals.locator("svg text").getByText("Mean", { exact: true }),
     ).toHaveCount(2);
     await expect(section.locator("[data-trajectory-chart]")).toHaveCount(0);
     await expect(section.getByText("Facet by generation")).toHaveCount(0);
@@ -672,6 +710,7 @@ test.describe("without file handles", () => {
     // intervals give each band's bounds. Both inside the fitted window.
     const trajectories = await hover("trajectories", 0.1);
     await expect(trajectories).toContainText("Observed");
+    await expect(trajectories).toContainText("Mean");
     await expect(trajectories).toContainText("Accepted median");
     await expect(trajectories).toContainText("Accepted range");
     await expect(trajectories).not.toContainText("Rejected range");
@@ -680,6 +719,7 @@ test.describe("without file handles", () => {
       .getByRole("button", { name: "Credible intervals" })
       .click();
     const intervals = await hover("trajectories", 0.1);
+    await expect(intervals).toContainText("Mean");
     await expect(intervals).toContainText("Median");
     await expect(intervals).toContainText("50% band");
     await expect(intervals).toContainText("90% band");

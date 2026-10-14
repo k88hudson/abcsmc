@@ -66,6 +66,7 @@ import {
   weightedSummary,
   type ParamSummary,
   quantileBands,
+  weightedMeans,
   spreadAt,
   weightedHistogram,
   weightedKde,
@@ -84,7 +85,10 @@ const error = ref<string | null>(null);
 const dragging = ref(false);
 const selectedGeneration = ref<number | null>(null);
 const logScale = ref(false);
+// Markers and target ranges on every chart (and in their tooltips).
+const showAnnotations = ref(true);
 const showAccepted = ref(true);
+const showMean = ref(true);
 const showRejected = ref(false);
 const showObserved = ref(true);
 const showRanges = ref(true);
@@ -412,9 +416,10 @@ function titled(base: string, name: string | null, rest: string): string {
     : `${name} ${base.toLowerCase()}: ${rest}`;
 }
 
-// Weighted median and central 50% and 90% bands of `trajectories`, with the
-// observed series on top. Shared by the projections and the credible-interval
-// view of the trajectories.
+// Weighted mean and central 50% and 90% bands of `trajectories`, with the
+// observed series on top; the weighted median is kept for the tooltip and
+// CSV. Shared by the projections and the credible-interval view of the
+// trajectories.
 function bandChart(
   trajectories: { weight: number; values: (number | null)[] }[],
   name: string | null,
@@ -428,6 +433,7 @@ function bandChart(
       trajectories,
       [0.05, 0.25, 0.5, 0.75, 0.95],
     );
+    const mean = weightedMeans(trajectories);
     const series: {
       x: number[];
       data: number[];
@@ -442,11 +448,11 @@ function bandChart(
     }[] = [
       {
         x,
-        data: bands[2]!,
-        color: palette.value.median,
+        data: mean,
+        color: palette.value.mean,
         strokeWidth: 2,
         dots: false,
-        legend: "Median",
+        legend: "Mean",
       },
     ];
     // Hollow points, under the observed series where the two overlap.
@@ -479,6 +485,7 @@ function bandChart(
       filename,
       name,
       bands,
+      mean,
       observed,
       comparisons,
       intervals: rangeIntervals(name),
@@ -490,6 +497,7 @@ function bandChart(
           { header: "q05", values: bands[0]! },
           { header: "q25", values: bands[1]! },
           { header: "median", values: bands[2]! },
+          { header: "mean", values: mean },
           { header: "q75", values: bands[3]! },
           { header: "q95", values: bands[4]! },
         ]),
@@ -588,7 +596,7 @@ const intervalGroups = computed(() => {
 // The run's markers as every series chart draws them: fixed vertical lines
 // in the theme's marker colour, labelled where the log labels them.
 const chartMarkers = computed(() =>
-  run.markers.map((marker) => ({
+  (showAnnotations.value ? run.markers : []).map((marker) => ({
     x: marker.x,
     label: marker.label ?? undefined,
     color: palette.value.marker,
@@ -599,6 +607,7 @@ const chartMarkers = computed(() =>
 // The target ranges of one series as its charts draw them: a whisker from
 // the floor to the ceiling at each position.
 function rangeIntervals(name: string | null) {
+  if (!showAnnotations.value) return [];
   return run.ranges
     .filter((r) => r.series === name)
     .map((r) => ({ x: r.x, lower: r.lower, upper: r.upper }));
@@ -705,9 +714,11 @@ interface TrajectoryView {
   name: string | null;
   observed: (number | null)[] | null;
   nParticles: number;
-  // `name` is the series' CSV column.
-  trajectories: { name: string; values: (number | null)[] }[];
+  // `name` is the series' CSV column; `weight` is the particle's.
+  trajectories: { name: string; weight: number; values: (number | null)[] }[];
   rejected: { name: string; values: (number | null)[] }[];
+  // The weighted mean of the accepted trajectories at each index.
+  mean: number[];
 }
 
 function trajectoryViewOf(
@@ -717,17 +728,20 @@ function trajectoryViewOf(
   name: string | null,
 ): TrajectoryView {
   const prefix = (g: Generation) => (prefixed ? `gen_${g.generation}_` : "");
+  const trajectories = gens.flatMap((g) =>
+    seriesValues(g.trajectories, name).map(({ trajectory, values }) => ({
+      name: `${prefix(g)}particle_${trajectory.particle}`,
+      weight: g.particles[trajectory.particle]?.weight ?? 0,
+      values,
+    })),
+  );
   return {
     label,
     name,
     observed: observedOf(name),
     nParticles: gens.reduce((n, g) => n + g.particles.length, 0),
-    trajectories: gens.flatMap((g) =>
-      seriesValues(g.trajectories, name).map(({ trajectory, values }) => ({
-        name: `${prefix(g)}particle_${trajectory.particle}`,
-        values,
-      })),
-    ),
+    trajectories,
+    mean: weightedMeans(trajectories),
     rejected: gens.flatMap((g) =>
       seriesValues(g.rejected, name).map(({ values }, i) => ({
         name: `${prefix(g)}rejected_${i}`,
@@ -823,11 +837,11 @@ function trajectoryFrame(g: TrajectoryView): Frame {
     if (g.observed && (showObserved.value || !onlyShown)) all.push(g.observed);
     if (showAccepted.value || !onlyShown)
       for (const t of g.trajectories) all.push(t.values);
+    if (showMean.value || !onlyShown) all.push(g.mean);
     if (showRejected.value || !onlyShown)
       for (const t of g.rejected) all.push(t.values);
     if (showRanges.value || !onlyShown)
-      for (const r of run.ranges)
-        if (r.series === g.name) all.push([r.lower, r.upper]);
+      for (const r of rangeIntervals(g.name)) all.push([r.lower, r.upper]);
     return all;
   };
   const shown = collect(true);
@@ -904,6 +918,15 @@ function trajectorySeries(g: TrajectoryView, frame: Frame) {
       });
     }
   }
+  if (showMean.value) {
+    series.push({
+      ...finitePoints(g.mean),
+      color: palette.value.mean,
+      strokeWidth: 2,
+      dots: false,
+      showInTooltip: false,
+    });
+  }
   if (g.observed && showObserved.value) {
     series.push({
       ...finitePoints(g.observed),
@@ -937,19 +960,21 @@ const trajectoryLegend = computed(() => {
       color: palette.value.observed,
       shown: showObserved,
     });
-  if (g && g.trajectories.length > 0)
+  if (g && g.trajectories.length > 0) {
     items.push({
       label: "Accepted",
       color: solid(palette.value.trajectory),
       shown: showAccepted,
     });
+    items.push({ label: "Mean", color: palette.value.mean, shown: showMean });
+  }
   if (g && g.rejected.length > 0)
     items.push({
       label: "Rejected",
       color: solid(palette.value.rejected),
       shown: showRejected,
     });
-  if (run.ranges.length > 0)
+  if (run.ranges.length > 0 && showAnnotations.value)
     items.push({
       label: "Target range",
       color: palette.value.range,
@@ -1024,9 +1049,11 @@ function trajectoryDownload(g: TrajectoryView) {
   const observed = showObserved.value ? g.observed : null;
   const trajectories = showAccepted.value ? g.trajectories : [];
   const rejected = showRejected.value ? g.rejected : [];
+  const mean = showMean.value ? g.mean : null;
   let length = observed?.length ?? 0;
   for (const t of trajectories) length = Math.max(length, t.values.length);
   for (const t of rejected) length = Math.max(length, t.values.length);
+  if (mean) length = Math.max(length, mean.length);
   return {
     title: titled("Trajectories", g.name, trajectorySubtitle(g)),
     filename: fileStem(run.id, "trajectories", g.name, g.label),
@@ -1034,6 +1061,7 @@ function trajectoryDownload(g: TrajectoryView) {
       columnsToCsv([
         { header: "index", values: Array.from({ length }, (_, i) => i) },
         ...(observed ? [{ header: "observed", values: observed }] : []),
+        ...(mean ? [{ header: "mean", values: mean }] : []),
         ...trajectories.map((t) => ({
           header: t.name,
           values: t.values,
@@ -1473,7 +1501,7 @@ function range(lo: number, hi: number): string {
 }
 
 function pushRange(rows: ReturnType<typeof tipRows>, r: TargetRange | null) {
-  if (r)
+  if (r && showAnnotations.value)
     rows.push("Target range", palette.value.range, range(r.lower, r.upper));
 }
 
@@ -1490,12 +1518,13 @@ function targetTipRows(
   return { values: rows.values, labels: rows.labels };
 }
 
-// A band chart's tooltip at `index`: the observed point, the median, and
-// each band's bounds.
+// A band chart's tooltip at `index`: the observed point, the mean, the
+// median, and each band's bounds.
 function bandTipRows(
   chart: {
     name: string | null;
     bands: number[][];
+    mean: number[];
     observed: (number | null)[] | null;
     comparisons: { label: string; values: (number | null)[] }[];
   },
@@ -1512,20 +1541,25 @@ function bandTipRows(
   }
   pushRange(rows, rangeAt(chart.name, index));
   const q = (k: number) => bands[k]![index] ?? NaN;
-  rows.push("Median", palette.value.median, q(2));
+  rows.push("Mean", palette.value.mean, chart.mean[index] ?? NaN);
+  rows.push("Median", palette.value.mean, q(2));
   rows.push("50% band", palette.value.band, range(q(1), q(3)));
   rows.push("90% band", palette.value.band, range(q(0), q(4)));
   return { values: rows.values, labels: rows.labels };
 }
 
-// The trajectories tooltip at `index`: the observed point and, for the
-// accepted and rejected trajectories showing, their median and range there.
+// The trajectories tooltip at `index`: the observed point, the weighted mean
+// of the accepted trajectories, and, for the accepted and rejected
+// trajectories showing, their median and range there.
 function trajectoryTipRows(view: TrajectoryView, index: number): TipRows {
   const rows = tipRows();
   const observed = observedAt(view.observed, index);
   if (showObserved.value && observed !== null)
     rows.push("Observed", palette.value.observed, observed);
   if (showRanges.value) pushRange(rows, rangeAt(view.name, index));
+  const mean = view.mean[index];
+  if (showMean.value && mean !== undefined && Number.isFinite(mean))
+    rows.push("Mean", palette.value.mean, mean);
   const spread = (
     label: string,
     color: string,
@@ -1732,7 +1766,10 @@ function fmt(x: number, digits = 3): string {
       <p v-if="run.description" class="description" data-testid="description">
         {{ run.description }}
       </p>
-      <Toggle v-model="logScale" label="Log scale" class="log-toggle" />
+      <div class="chart-toggles">
+        <Toggle v-model="logScale" label="Log scale" />
+        <Toggle v-model="showAnnotations" label="Annotations" />
+      </div>
 
       <div
         class="tab-panel"
@@ -1846,7 +1883,7 @@ function fmt(x: number, digits = 3): string {
             />
           </div>
           <p v-if="trajectoryMode === 'intervals'" class="muted legend-hint">
-            Weighted median and central 50% and 90% bands of the logged accepted
+            Weighted mean and central 50% and 90% bands of the logged accepted
             trajectories, one chart per generation.
           </p>
           <p v-else class="muted legend-hint">
@@ -2215,7 +2252,7 @@ function fmt(x: number, digits = 3): string {
         data-testid="projections"
       >
         <p class="muted">
-          Posterior particles simulated forward. Line is the weighted median,
+          Posterior particles simulated forward. Line is the weighted mean,
           bands are the central 50% and 90%.
         </p>
         <div class="cells">
@@ -2341,7 +2378,10 @@ h4 small {
   height: 0.2em;
   border-radius: 1px;
 }
-.log-toggle {
+.chart-toggles {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.25rem 1.25rem;
   font-size: 0.85rem;
   margin-bottom: 1rem;
 }

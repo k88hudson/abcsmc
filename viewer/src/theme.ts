@@ -14,7 +14,7 @@ export interface ChartPalette {
   rejected: string;
   // Legend swatch of a series that is turned off.
   legendOff: string;
-  median: string;
+  mean: string;
   band: string;
   bandOpacity: [number, number];
   marker: string;
@@ -34,7 +34,7 @@ const light: ChartPalette = {
   trajectory: "rgba(37, 99, 235, 0.16)",
   rejected: "rgba(220, 38, 38, 0.25)",
   legendOff: "rgba(100, 116, 139, 0.3)",
-  median: "#1d4ed8",
+  mean: "#1d4ed8",
   band: "#2563eb",
   bandOpacity: [0.15, 0.3],
   marker: "#64748b",
@@ -52,7 +52,7 @@ const dark: ChartPalette = {
   trajectory: "rgba(96, 165, 250, 0.2)",
   rejected: "rgba(230, 103, 103, 0.3)",
   legendOff: "rgba(148, 163, 184, 0.3)",
-  median: "#86b6ef",
+  mean: "#86b6ef",
   band: "#3987e5",
   bandOpacity: [0.2, 0.4],
   marker: "#94a3b8",

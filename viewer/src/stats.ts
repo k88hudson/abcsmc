@@ -196,6 +196,34 @@ export function quantileBands(
   return { x: Array.from({ length }, (_, i) => i), bands };
 }
 
+// The weighted mean across trajectories at every index any of them reaches,
+// over the trajectories with a finite value there. NaN where none has one.
+export function weightedMeans(
+  trajectories: { weight: number; values: (number | null)[] }[],
+): number[] {
+  let length = 0;
+  for (const t of trajectories) length = Math.max(length, t.values.length);
+  const means = new Array<number>(length);
+  for (let i = 0; i < length; i++) {
+    let sum = 0;
+    let total = 0;
+    for (const t of trajectories) {
+      const v = t.values[i];
+      if (
+        v === null ||
+        v === undefined ||
+        !Number.isFinite(v) ||
+        !(t.weight > 0)
+      )
+        continue;
+      sum += t.weight * v;
+      total += t.weight;
+    }
+    means[i] = total > 0 ? sum / total : NaN;
+  }
+  return means;
+}
+
 export interface ParamSummary {
   mean: number;
   // Weighted standard deviation with the same reliability-weights correction
