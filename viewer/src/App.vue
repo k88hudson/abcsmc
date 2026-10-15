@@ -10,6 +10,7 @@ import {
 } from "vue";
 import {
   Button,
+  DatePicker,
   Hint,
   SelectBox,
   SidebarLayout,
@@ -17,6 +18,18 @@ import {
   ToggleGroup,
 } from "cfasim-ui/components";
 import { BarChart, DataTable, LineChart } from "cfasim-ui/charts";
+import {
+  calendarOf,
+  dateAt,
+  defaultAxis,
+  loadAxis,
+  logAxis,
+  placeIntervals,
+  placeSeries,
+  placeX,
+  saveAxis,
+  type TimeAxis,
+} from "./axis";
 import ChartTip from "./ChartTip.vue";
 import CorrelationTable, { type CorrelationRow } from "./CorrelationTable.vue";
 import Pager from "./Pager.vue";
@@ -106,6 +119,53 @@ const main = ref<HTMLElement | null>(null);
 const exporting = ref(false);
 const yScaleType = computed(() => (logScale.value ? "log" : "linear"));
 let stopTail: (() => void) | null = null;
+
+// Model time or calendar time on the series charts, remembered per run.
+const timeAxis = reactive<TimeAxis>(defaultAxis());
+const TIME_MODES = [
+  { value: "model", label: "Model time" },
+  { value: "calendar", label: "Calendar time" },
+];
+const STEPS = computed(() => {
+  const steps = [
+    { value: "1", label: "Daily" },
+    { value: "7", label: "Weekly" },
+  ];
+  const step = String(timeAxis.stepDays);
+  // A log's calendar can step by any number of days.
+  if (!steps.some((s) => s.value === step))
+    steps.push({ value: step, label: `Every ${step} days` });
+  return steps;
+});
+const stepChoice = computed({
+  get: () => String(timeAxis.stepDays),
+  set: (value: string | undefined) => {
+    if (value) timeAxis.stepDays = Number(value);
+  },
+});
+const calendar = computed(() => calendarOf(timeAxis));
+const xAxisLabel = computed(() => (calendar.value ? "Date" : "Index"));
+const ownAxis = computed(() => logAxis(run.calendar));
+watch([() => run.id, ownAxis], ([id, own]) =>
+  Object.assign(timeAxis, (id ? loadAxis(id) : null) ?? { ...own }),
+);
+watch(timeAxis, (axis) => {
+  if (run.id) saveAxis(run.id, axis, ownAxis.value);
+});
+
+function xHeading(index: number): string {
+  const c = calendar.value;
+  return c ? `${dateAt(c, index)} (index ${index})` : `Index ${index}`;
+}
+
+// The x columns of a chart's CSV: the index, and the date in calendar time.
+function xColumns(index: readonly number[]) {
+  const c = calendar.value;
+  return [
+    { header: "index", values: index },
+    ...(c ? [{ header: "date", values: index.map((i) => dateAt(c, i)) }] : []),
+  ];
+}
 
 function reset() {
   stopTail?.();
@@ -233,7 +293,7 @@ async function exportAll() {
   if (!main.value || exporting.value) return;
   exporting.value = true;
   try {
-    const { name, zip } = await exportOutputs(run, main.value);
+    const { name, zip } = await exportOutputs(run, main.value, calendar.value);
     downloadBytes(zip, name, "application/zip");
   } catch (e) {
     error.value = String(e);
@@ -488,10 +548,10 @@ function bandChart(
       mean,
       observed,
       comparisons,
-      intervals: rangeIntervals(name),
+      intervals: placeIntervals(calendar.value, rangeIntervals(name)),
       csv: () =>
         columnsToCsv([
-          { header: "index", values: x },
+          ...xColumns(x),
           ...(observed ? [{ header: "observed", values: observed }] : []),
           ...comparisons.map((c) => ({ header: c.label, values: c.values })),
           { header: "q05", values: bands[0]! },
@@ -501,8 +561,8 @@ function bandChart(
           { header: "q75", values: bands[3]! },
           { header: "q95", values: bands[4]! },
         ]),
-      series,
-      areas: [
+      series: placeSeries(calendar.value, series),
+      areas: placeSeries(calendar.value, [
         {
           x,
           lower: bands[0]!,
@@ -519,7 +579,7 @@ function bandChart(
           opacity: palette.value.bandOpacity[1],
           legend: "50%",
         },
-      ],
+      ]),
     };
   }
 }
@@ -597,7 +657,7 @@ const intervalGroups = computed(() => {
 // in the theme's marker colour, labelled where the log labels them.
 const chartMarkers = computed(() =>
   (showAnnotations.value ? run.markers : []).map((marker) => ({
-    x: marker.x,
+    x: placeX(calendar.value, marker.x),
     label: marker.label ?? undefined,
     color: palette.value.marker,
     draggable: false,
@@ -640,14 +700,14 @@ const targetCharts = computed(() =>
       key: observed.name ?? "",
       name: observed.name,
       values: observed.values,
-      intervals: ranges,
+      intervals: placeIntervals(calendar.value, ranges),
       points: points.x.length,
       title:
         observed.name === null
           ? "Target data"
           : `Target data: ${observed.name}`,
       filename: fileStem(run.id, "target", observed.name),
-      series: [
+      series: placeSeries(calendar.value, [
         {
           ...points,
           color: palette.value.observed,
@@ -657,10 +717,10 @@ const targetCharts = computed(() =>
           dotStroke: palette.value.observedOutline,
           legend: "Observed",
         },
-      ],
+      ]),
       csv: () =>
         columnsToCsv([
-          { header: "index", values: points.x },
+          ...xColumns(points.x),
           { header: observed.name ?? "observed", values: points.data },
           ...(ranges.length > 0
             ? [
@@ -683,6 +743,11 @@ const targetTable = computed(() => {
     string,
     { label: string; align?: "right"; width: "small" }
   > = { index: { label: "Index", width: "small" } };
+  const c = calendar.value;
+  if (c) {
+    data.date = index.map((i) => dateAt(c, i));
+    columnConfig.date = { label: "Date", width: "small" };
+  }
   run.observed.forEach((s, i) => {
     const column = `s${i}`;
     data[column] = index.map((j) => s.values[j] ?? "");
@@ -788,8 +853,10 @@ const trajectoryGroups = computed(() => {
     const charts = views.map((view) => ({
       key: view.label,
       view,
-      series: trajectorySeries(view, frame),
-      intervals: showRanges.value ? rangeIntervals(name) : [],
+      series: placeSeries(calendar.value, trajectorySeries(view, frame)),
+      intervals: showRanges.value
+        ? placeIntervals(calendar.value, rangeIntervals(name))
+        : [],
       ...trajectoryDownload(view),
       // Facets are narrow, so their titles are short.
       ...(views.length > 1
@@ -1059,7 +1126,7 @@ function trajectoryDownload(g: TrajectoryView) {
     filename: fileStem(run.id, "trajectories", g.name, g.label),
     csv: () =>
       columnsToCsv([
-        { header: "index", values: Array.from({ length }, (_, i) => i) },
+        ...xColumns(Array.from({ length }, (_, i) => i)),
         ...(observed ? [{ header: "observed", values: observed }] : []),
         ...(mean ? [{ header: "mean", values: mean }] : []),
         ...trajectories.map((t) => ({
@@ -1770,6 +1837,23 @@ function fmt(x: number, digits = 3): string {
         <Toggle v-model="logScale" label="Log scale" />
         <Toggle v-model="showAnnotations" label="Annotations" />
       </div>
+      <div class="time-axis" data-testid="time-axis">
+        <ToggleGroup
+          v-model="timeAxis.mode"
+          :options="TIME_MODES"
+          label="X axis"
+          hide-label
+        />
+        <template v-if="timeAxis.mode === 'calendar'">
+          <DatePicker
+            v-model="timeAxis.start"
+            label="Start date"
+            hint="The date of index 0"
+            class="start-date"
+          />
+          <SelectBox v-model="stepChoice" :options="STEPS" label="Step" />
+        </template>
+      </div>
 
       <div
         class="tab-panel"
@@ -1908,7 +1992,7 @@ function fmt(x: number, digits = 3): string {
                   :intervals="chart.intervals"
                   :interval-style="intervalStyle"
                   :height="group.charts.length > 1 ? 300 : 260"
-                  x-label="Index"
+                  :x-label="xAxisLabel"
                   y-label="Value"
                   :y-scale-type="yScaleType"
                   :filename="chart.filename"
@@ -1919,7 +2003,7 @@ function fmt(x: number, digits = 3): string {
                 >
                   <template #tooltip="t">
                     <ChartTip
-                      :heading="`Index ${t.index}`"
+                      :heading="xHeading(t.index)"
                       v-bind="bandTipRows(chart, t.index)"
                     />
                   </template>
@@ -1941,7 +2025,7 @@ function fmt(x: number, digits = 3): string {
                   :intervals="chart.intervals"
                   :interval-style="intervalStyle"
                   :height="group.charts.length > 1 ? 300 : 260"
-                  x-label="Index"
+                  :x-label="xAxisLabel"
                   y-label="Value"
                   :y-scale-type="yScaleType"
                   :filename="chart.filename"
@@ -1955,7 +2039,7 @@ function fmt(x: number, digits = 3): string {
                 >
                   <template #tooltip="t">
                     <ChartTip
-                      :heading="`Index ${t.index}`"
+                      :heading="xHeading(t.index)"
                       v-bind="trajectoryTipRows(chart.view, t.index)"
                     />
                   </template>
@@ -2205,7 +2289,7 @@ function fmt(x: number, digits = 3): string {
             :intervals="chart.intervals"
             :interval-style="intervalStyle"
             :height="220"
-            x-label="Index"
+            :x-label="xAxisLabel"
             y-label="Value"
             :y-scale-type="yScaleType"
             :filename="chart.filename"
@@ -2216,7 +2300,7 @@ function fmt(x: number, digits = 3): string {
           >
             <template #tooltip="t">
               <ChartTip
-                :heading="`Index ${t.index}`"
+                :heading="xHeading(t.index)"
                 v-bind="targetTipRows(chart, t.index)"
               />
             </template>
@@ -2269,7 +2353,7 @@ function fmt(x: number, digits = 3): string {
               :intervals="chart.intervals"
               :interval-style="intervalStyle"
               :height="280"
-              x-label="Index"
+              :x-label="xAxisLabel"
               y-label="Value"
               :y-scale-type="yScaleType"
               :filename="chart.filename"
@@ -2280,7 +2364,7 @@ function fmt(x: number, digits = 3): string {
             >
               <template #tooltip="t">
                 <ChartTip
-                  :heading="`Index ${t.index}`"
+                  :heading="xHeading(t.index)"
                   v-bind="bandTipRows(chart, t.index)"
                 />
               </template>
@@ -2384,6 +2468,19 @@ h4 small {
   gap: 0.25rem 1.25rem;
   font-size: 0.85rem;
   margin-bottom: 1rem;
+}
+
+.time-axis {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: end;
+  gap: 0.5rem 1rem;
+  font-size: 0.85rem;
+  margin-bottom: 1rem;
+}
+
+.time-axis .start-date {
+  width: 12rem;
 }
 .side-section {
   margin-bottom: 1.25rem;

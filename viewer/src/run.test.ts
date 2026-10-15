@@ -351,6 +351,30 @@ describe("markers", () => {
   });
 });
 
+describe("calendar", () => {
+  it("comes with the run and an appended one replaces it", () => {
+    const s = emptyRun();
+    applyLine(s, started);
+    expect(s.calendar).toBeNull();
+    applyLine(
+      s,
+      JSON.stringify({
+        ...JSON.parse(started),
+        calendar: { start: "2026-01-05", step_days: 7 },
+      }),
+    );
+    expect(s.calendar).toEqual({ start: "2026-01-05", step_days: 7 });
+    applyLine(
+      s,
+      JSON.stringify({
+        type: "calendar",
+        calendar: { start: "2025-12-01", step_days: 1 },
+      }),
+    );
+    expect(s.calendar).toEqual({ start: "2025-12-01", step_days: 1 });
+  });
+});
+
 describe("ranges", () => {
   it("come with the run and appended ones replace by series and x", () => {
     const s = emptyRun();

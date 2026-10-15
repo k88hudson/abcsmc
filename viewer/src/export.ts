@@ -2,6 +2,7 @@
 // summaries as CSV and every rendered chart as a PNG, bundled into one zip.
 
 import { strToU8, zipSync } from "fflate";
+import { dateAt, type Calendar } from "./axis";
 import { columnsToCsv, fileStem } from "./csv";
 import { completedGenerations, type RunState } from "./run";
 import { parameterSummaries, type ParamSummary } from "./stats";
@@ -35,8 +36,12 @@ export function particlesCsv(run: RunState): string {
 }
 
 // Long format: one row per value of every series of every logged
-// trajectory. `series` is empty for an unnamed series.
-export function trajectoriesCsv(run: RunState): string {
+// trajectory. `series` is empty for an unnamed series; `date` is there in
+// calendar time.
+export function trajectoriesCsv(
+  run: RunState,
+  calendar: Calendar | null = null,
+): string {
   const generation: number[] = [];
   const particle: number[] = [];
   const series: string[] = [];
@@ -60,6 +65,9 @@ export function trajectoriesCsv(run: RunState): string {
     { header: "particle", values: particle },
     { header: "series", values: series },
     { header: "index", values: index },
+    ...(calendar
+      ? [{ header: "date", values: index.map((i) => dateAt(calendar, i)) }]
+      : []),
     { header: "value", values: value },
   ]);
 }
@@ -212,10 +220,11 @@ export async function chartImages(root: ParentNode): Promise<ExportFile[]> {
 export async function exportOutputs(
   run: RunState,
   root: ParentNode,
+  calendar: Calendar | null = null,
 ): Promise<{ name: string; zip: Uint8Array }> {
   const zip = buildZip([
     { path: "particles.csv", data: particlesCsv(run) },
-    { path: "trajectories.csv", data: trajectoriesCsv(run) },
+    { path: "trajectories.csv", data: trajectoriesCsv(run, calendar) },
     { path: "posteriors.csv", data: posteriorsCsv(run) },
     ...(await chartImages(root)),
   ]);

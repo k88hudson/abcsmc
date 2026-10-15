@@ -746,6 +746,113 @@ test.describe("without file handles", () => {
     await expect(projected).not.toContainText("Observed");
   });
 
+  test("calendar time draws the series charts on dates from a start date", async ({
+    page,
+  }) => {
+    await page.goto("/");
+    await page.getByLabel("Load run.jsonl").setInputFiles(fixture);
+    await expect(page.getByTestId("status")).toHaveText("Finished");
+
+    const axis = page.getByTestId("time-axis");
+    const chart = page
+      .getByTestId("trajectories")
+      .locator(".line-chart-wrapper")
+      .first();
+    await expect(chart).toContainText("Index");
+
+    // Calendar time without a start date stays on the index.
+    await axis.getByRole("button", { name: "Calendar time" }).click();
+    await expect(chart).toContainText("Index");
+
+    const start = axis.getByLabel("Start date");
+    await start.fill("2026-01-05");
+    await start.press("Enter");
+    await expect(chart).toContainText("Date");
+    await expect(chart).toContainText("Jan");
+    await expect(chart).toContainText("Feb");
+    // Markers and target ranges move with the series.
+    await expect(
+      page.getByTestId("trajectories").locator(".line-chart-marker"),
+    ).toHaveCount(4);
+
+    await chart.scrollIntoViewIfNeeded();
+    const box = (await chart.boundingBox())!;
+    await page.mouse.move(box.x + box.width * 0.1, box.y + box.height * 0.5);
+    await expect(chart.locator(".chart-tip")).toContainText(
+      /2026-01-\d\d \(index \d+\)/,
+    );
+
+    // Weekly steps stretch the 168 projected indices over three years.
+    await axis.getByRole("combobox", { name: "Step" }).click();
+    await page.getByRole("option", { name: "Weekly" }).click();
+    await expect(chart).toContainText("2028");
+    const downloading = page.waitForEvent("download");
+    await page.getByRole("button", { name: "Export outputs" }).click();
+    const entries = unzipSync(
+      new Uint8Array(await readFile((await (await downloading).path())!)),
+    );
+    const trajectories = strFromU8(entries["trajectories.csv"]!).split("\n");
+    expect(trajectories[0]).toBe("generation,particle,series,index,date,value");
+    expect(trajectories[1]).toMatch(/,0,2026-01-05,/);
+    expect(trajectories[2]).toMatch(/,1,2026-01-12,/);
+
+    // Remembered for this run.
+    await page.reload();
+    await expect(page.getByTestId("status")).toHaveText("Finished");
+    await expect(
+      page.getByTestId("time-axis").getByLabel("Start date"),
+    ).toHaveValue("2026-01-05");
+    await expect(
+      page.getByTestId("trajectories").locator(".line-chart-wrapper").first(),
+    ).toContainText("Date");
+
+    await page
+      .getByTestId("time-axis")
+      .getByRole("button", { name: "Model time" })
+      .click();
+    await expect(
+      page.getByTestId("trajectories").locator(".line-chart-wrapper").first(),
+    ).toContainText("Index");
+  });
+
+  test("a run whose log gives a calendar opens in calendar time", async ({
+    page,
+  }) => {
+    const text = await readFile(fixture, "utf8");
+    const calendar = JSON.stringify({
+      type: "calendar",
+      calendar: { start: "2025-11-03", step_days: 3 },
+    });
+    await page.goto("/");
+    await page.getByLabel("Load run.jsonl").setInputFiles({
+      name: "renewal.jsonl",
+      mimeType: "application/jsonl",
+      buffer: Buffer.from(`${text.trimEnd()}\n${calendar}\n`),
+    });
+    await expect(page.getByTestId("status")).toHaveText("Finished");
+
+    const axis = page.getByTestId("time-axis");
+    await expect(axis.getByLabel("Start date")).toHaveValue("2025-11-03");
+    await expect(axis.getByRole("combobox", { name: "Step" })).toContainText(
+      "Every 3 days",
+    );
+    const chart = page
+      .getByTestId("trajectories")
+      .locator(".line-chart-wrapper")
+      .first();
+    await expect(chart).toContainText("Date");
+    await expect(chart).toContainText("2026");
+
+    // Model time is still a click away, and remembered over the log's.
+    await axis.getByRole("button", { name: "Model time" }).click();
+    await expect(chart).toContainText("Index");
+    await page.reload();
+    await expect(page.getByTestId("status")).toHaveText("Finished");
+    await expect(
+      page.getByTestId("trajectories").locator(".line-chart-wrapper").first(),
+    ).toContainText("Index");
+  });
+
   test("exports particles, trajectories, and every plot as one zip", async ({
     page,
   }) => {

@@ -117,6 +117,14 @@ export interface TargetRange {
   series: string | null;
 }
 
+// The dates the series' indices stand for: index i is `start + i *
+// step_days` days. Logged with the run, or set by a `calendar` event
+// appended after it (the latest wins).
+export interface LoggedCalendar {
+  start: string;
+  step_days: number;
+}
+
 export interface RunState {
   id: string | null;
   description: string | null;
@@ -130,6 +138,7 @@ export interface RunState {
   observed: Series[];
   markers: Marker[];
   ranges: TargetRange[];
+  calendar: LoggedCalendar | null;
   generations: Generation[];
   projections: Projection[];
   comparisons: Comparison[];
@@ -157,6 +166,8 @@ export type RunEvent =
       markers?: Marker[];
       // Absent in logs written before ranges existed.
       ranges?: TargetRange[];
+      // Absent in logs written before calendars existed.
+      calendar?: LoggedCalendar | null;
     }
   | { type: "generation_started"; generation: number; tolerance: number | null }
   | {
@@ -185,7 +196,8 @@ export type RunEvent =
     }
   | { type: "comparison"; label: string; series: Series[] }
   | { type: "markers"; markers: Marker[] }
-  | { type: "ranges"; ranges: TargetRange[] };
+  | { type: "ranges"; ranges: TargetRange[] }
+  | { type: "calendar"; calendar: LoggedCalendar };
 
 // A logged trajectory: its `series`, or in logs written before series had
 // names the `values` of one unnamed series.
@@ -248,6 +260,7 @@ export function emptyRun(): RunState {
     generations: [],
     markers: [],
     ranges: [],
+    calendar: null,
     projections: [],
     comparisons: [],
     status: "empty",
@@ -293,6 +306,7 @@ export function applyEvent(state: RunState, event: RunEvent): RunState {
         observed: observedOf(event.observed),
         markers: event.markers ?? [],
         ranges: event.ranges ?? [],
+        calendar: event.calendar ?? null,
         status: "running",
       });
       break;
@@ -354,6 +368,10 @@ export function applyEvent(state: RunState, event: RunEvent): RunState {
       break;
     }
     // A range replaces an earlier one on the same series at the same x.
+    case "calendar": {
+      state.calendar = event.calendar;
+      break;
+    }
     case "ranges": {
       for (const range of event.ranges) {
         const existing = state.ranges.findIndex(

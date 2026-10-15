@@ -10,12 +10,13 @@ use std::sync::Mutex;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
 
+use crate::calendar::push_calendar;
 use crate::marker::push_markers;
 use crate::platform::{Bar, Instant};
 use crate::range::push_ranges;
 use crate::{
-    Adaptive, CalibrationModel, Distance, Draw, Generation, Marker, ParamPrior, Params, Series,
-    TargetRange, Value,
+    Adaptive, Calendar, CalibrationModel, Distance, Draw, Generation, Marker, ParamPrior, Params,
+    Series, TargetRange, Value,
 };
 
 /// What a run declares before its first generation.
@@ -41,6 +42,8 @@ pub struct RunMeta {
     pub markers: Vec<Marker>,
     /// The ranges the distance fits series to, if it exposes any.
     pub ranges: Vec<TargetRange>,
+    /// The dates of the series' indices: the distance's, else the model's.
+    pub calendar: Option<Calendar>,
 }
 
 #[derive(Clone, Debug)]
@@ -86,6 +89,7 @@ impl RunMeta {
             observed: distance.observed_series(),
             markers: [distance.markers(), model.markers()].concat(),
             ranges: distance.ranges(),
+            calendar: distance.calendar().or_else(|| model.calendar()),
         }
     }
 }
@@ -271,7 +275,8 @@ impl<M: CalibrationModel> RunObserver<M> for StdoutObserver {
 ///   positions the distance and model mark on the trajectories, see
 ///   [`Marker`]), `ranges` (`[{x, lower, upper, value, series}]`, value a
 ///   number or `null`, series a string or `null`: the ranges the distance
-///   fits series to, see [`TargetRange`]).
+///   fits series to, see [`TargetRange`]), `calendar` (`{start, step_days}`
+///   or `null`: index `i` is `start + i * step_days` days, see [`Calendar`]).
 /// - `generation_started`: `generation`, `tolerance` (`null` when infinite).
 /// - `progress`: `generation`, running `accepted` and `attempts` counts, and
 ///   `batch`, the `{params, distance}` of every particle accepted since the
@@ -299,6 +304,8 @@ impl<M: CalibrationModel> RunObserver<M> for StdoutObserver {
 /// - `ranges`: `ranges` (`[{x, lower, upper, value, series}]`), appended
 ///   after the run by [`append_ranges`]; one on the same series at the same
 ///   x replaces the run's.
+/// - `calendar`: `calendar` (`{start, step_days}`), appended after the run by
+///   [`append_calendar`]; the latest replaces the run's.
 ///
 /// Integer parameters are written as JSON integers, real ones as numbers.
 pub struct JsonlObserver {
@@ -488,6 +495,8 @@ impl<M: CalibrationModel> RunObserver<M> for JsonlObserver {
         push_markers(&mut line, &meta.markers);
         line.push_str(r#","ranges":"#);
         push_ranges(&mut line, &meta.ranges);
+        line.push_str(r#","calendar":"#);
+        push_calendar(&mut line, meta.calendar.as_ref());
         line.push('}');
         self.write_line(&line);
     }

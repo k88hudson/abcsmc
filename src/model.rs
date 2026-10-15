@@ -1,5 +1,5 @@
 use crate::{
-    Draw, Marker, PerturbationKernel, Priors, Series, VarianceAdapter, default_adapter,
+    Calendar, Draw, Marker, PerturbationKernel, Priors, Series, VarianceAdapter, default_adapter,
     default_kernel,
 };
 
@@ -67,5 +67,13 @@ pub trait CalibrationModel {
     /// trajectories: when a change takes effect, say. Not used by the engine.
     fn markers(&self) -> Vec<Marker> {
         Vec::new()
+    }
+
+    /// The dates the series' indices stand for, when the distance does not
+    /// give them ([`Distance::calendar`]). Not used by the engine.
+    ///
+    /// [`Distance::calendar`]: crate::Distance::calendar
+    fn calendar(&self) -> Option<Calendar> {
+        None
     }
 }

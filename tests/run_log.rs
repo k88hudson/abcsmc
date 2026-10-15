@@ -2,9 +2,9 @@
 #![cfg(feature = "serde")]
 
 use abcsmc::{
-    CalibrationModel, Comparison, Draw as _, IntPrior, JsonlObserver, Marker, Posterior, Priors,
-    ProjectedTrajectory, Projection, RealPrior, RunLog, Series, TargetRange, append_markers,
-    append_ranges, define_priors, distance_to, run_quantiles_with,
+    Calendar, CalibrationModel, Comparison, Draw as _, IntPrior, JsonlObserver, Marker, Posterior,
+    Priors, ProjectedTrajectory, Projection, RealPrior, RunLog, Series, TargetRange,
+    append_calendar, append_markers, append_ranges, define_priors, distance_to, run_quantiles_with,
 };
 use rand::{SeedableRng, rngs::StdRng};
 
@@ -24,6 +24,10 @@ impl CalibrationModel for Product {
 
     fn markers(&self) -> Vec<Marker> {
         vec![Marker::labelled(3.0, "model")]
+    }
+
+    fn calendar(&self) -> Option<Calendar> {
+        Some(Calendar::weekly("2026-01-05").unwrap())
     }
 
     fn priors(&self) -> Priors {
@@ -218,6 +222,8 @@ fn a_log_without_series_names_reads_as_one_unnamed_series() {
         vec![ProjectedTrajectory::new(1.0, vec![2.0, 4.0])]
     );
 
+    assert_eq!(log.calendar, None);
+
     let none = text.replace(r#""observed":[1.0,null,3.0]"#, r#""observed":null"#);
     assert!(RunLog::parse(&none).unwrap().observed.is_empty());
 }
@@ -238,6 +244,46 @@ fn appended_markers_replace_by_label_and_add_the_rest() {
             ]
         );
     });
+}
+
+#[test]
+fn the_model_calendar_is_logged_and_an_appended_one_replaces_it() {
+    with_run("calendar", |path, _| {
+        let log = RunLog::read(path).unwrap();
+        assert_eq!(log.calendar, Calendar::weekly("2026-01-05").ok());
+        append_calendar(path, &Calendar::daily("2025-12-01").unwrap()).unwrap();
+        let log = RunLog::read(path).unwrap();
+        assert_eq!(log.calendar, Calendar::daily("2025-12-01").ok());
+    });
+}
+
+#[test]
+fn the_distance_calendar_wins_over_the_model_one() {
+    let dir = std::env::temp_dir().join(format!("abcsmc-calendar-distance-{}", std::process::id()));
+    let log = JsonlObserver::create(&dir, "calendar-distance").unwrap();
+    let path = log.path().to_path_buf();
+    let distance = distance_to("distance to 12", &[12.0], |o: &f64, obs: &[f64]| {
+        (o - obs[0]).abs()
+    })
+    .with_calendar(Calendar::daily("2024-02-29").unwrap());
+    run_quantiles_with(&Product, &distance, &[0.5], 50, "", &log);
+    drop(log);
+    let read = RunLog::read(&path).unwrap();
+    std::fs::remove_dir_all(&dir).unwrap();
+    assert_eq!(read.calendar, Calendar::daily("2024-02-29").ok());
+}
+
+#[test]
+fn a_calendar_that_is_not_a_date_is_an_error() {
+    let text = concat!(
+        r#"{"type":"run_started","id":"bad","n_particles":1,"n_generations":1,"#,
+        r#""params":[{"name":"x","kind":"real"}],"observed":[],"#,
+        r#""calendar":{"start":"2026-02-30","step_days":1}}"#,
+        "\n",
+        r#"{"type":"run_finished","generations":0}"#,
+        "\n",
+    );
+    assert!(RunLog::parse(text).is_err());
 }
 
 #[test]

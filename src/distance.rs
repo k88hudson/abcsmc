@@ -18,7 +18,7 @@
 //! - [`l1_outside`]: how far each point falls outside a range `[lower,
 //!   upper]`, summed; zero for a simulation inside every range.
 
-use crate::{Marker, Series, TargetRange};
+use crate::{Calendar, Marker, Series, TargetRange};
 
 /// How far a simulated output is from the observed data. A particle is
 /// accepted when this is within the generation's tolerance.
@@ -65,6 +65,12 @@ pub trait Distance<O>: Sync {
     fn ranges(&self) -> Vec<TargetRange> {
         Vec::new()
     }
+
+    /// The dates the series' indices stand for, for viewers to draw them in
+    /// calendar time. Not used by the engine.
+    fn calendar(&self) -> Option<Calendar> {
+        None
+    }
 }
 
 impl<O, F: Fn(&O) -> f64 + Sync> Distance<O> for F {
@@ -78,6 +84,7 @@ pub struct DistanceFn<F> {
     description: String,
     markers: Vec<Marker>,
     ranges: Vec<TargetRange>,
+    calendar: Option<Calendar>,
     f: F,
 }
 
@@ -93,6 +100,12 @@ impl<F> DistanceFn<F> {
         self.ranges.extend(ranges);
         self
     }
+
+    /// Sets the dates of the series' indices, see [`Distance::calendar`].
+    pub fn with_calendar(mut self, calendar: Calendar) -> Self {
+        self.calendar = Some(calendar);
+        self
+    }
 }
 
 /// A [`Distance`] from a closure and a description of what it measures.
@@ -104,6 +117,7 @@ where
         description: description.into(),
         markers: Vec::new(),
         ranges: Vec::new(),
+        calendar: None,
         f,
     }
 }
@@ -124,6 +138,10 @@ impl<O, F: Fn(&O) -> f64 + Sync> Distance<O> for DistanceFn<F> {
     fn ranges(&self) -> Vec<TargetRange> {
         self.ranges.clone()
     }
+
+    fn calendar(&self) -> Option<Calendar> {
+        self.calendar.clone()
+    }
 }
 
 /// A distance to an observed series that it owns. Build one with
@@ -133,6 +151,7 @@ pub struct DistanceTo<B, F> {
     observed: Vec<B>,
     markers: Vec<Marker>,
     ranges: Vec<TargetRange>,
+    calendar: Option<Calendar>,
     f: F,
 }
 
@@ -146,6 +165,12 @@ impl<B, F> DistanceTo<B, F> {
     /// Adds target ranges for viewers to draw, see [`Distance::ranges`].
     pub fn with_ranges(mut self, ranges: impl IntoIterator<Item = TargetRange>) -> Self {
         self.ranges.extend(ranges);
+        self
+    }
+
+    /// Sets the dates of the series' indices, see [`Distance::calendar`].
+    pub fn with_calendar(mut self, calendar: Calendar) -> Self {
+        self.calendar = Some(calendar);
         self
     }
 }
@@ -180,6 +205,7 @@ where
         observed: observed.to_vec(),
         markers: Vec::new(),
         ranges: Vec::new(),
+        calendar: None,
         f,
     }
 }
@@ -207,6 +233,10 @@ where
 
     fn ranges(&self) -> Vec<TargetRange> {
         self.ranges.clone()
+    }
+
+    fn calendar(&self) -> Option<Calendar> {
+        self.calendar.clone()
     }
 }
 

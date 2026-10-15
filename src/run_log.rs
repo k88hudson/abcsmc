@@ -108,8 +108,8 @@ mod reader {
     use crate::marker::merge_markers;
     use crate::range::merge_ranges;
     use crate::{
-        Adaptive, Draw, GenerationStats, Marker, ParamMeta, ParamPrior, Params, Population, Series,
-        TargetRange, Value, resample_indices,
+        Adaptive, Calendar, Draw, GenerationStats, Marker, ParamMeta, ParamPrior, Params,
+        Population, Series, TargetRange, Value, resample_indices,
     };
 
     /// A run log read back from disk: what the run declared, every completed
@@ -134,6 +134,9 @@ mod reader {
         /// The ranges the distance fits series to, with any appended
         /// `ranges` events merged in.
         pub ranges: Vec<TargetRange>,
+        /// The dates of the series' indices, the latest appended `calendar`
+        /// event winning over the run's.
+        pub calendar: Option<Calendar>,
         /// The completed generations. A generation that was under way when
         /// the log was read is not among them.
         pub generations: Vec<LoggedGeneration>,
@@ -200,6 +203,19 @@ mod reader {
                 x: spec.x,
                 label: spec.label,
             }
+        }
+    }
+
+    #[derive(Deserialize)]
+    struct CalendarSpec {
+        start: String,
+        step_days: u32,
+    }
+
+    impl TryFrom<CalendarSpec> for Calendar {
+        type Error = io::Error;
+        fn try_from(spec: CalendarSpec) -> io::Result<Self> {
+            Calendar::new(&spec.start, spec.step_days).map_err(|e| invalid(e.to_string()))
         }
     }
 
@@ -326,6 +342,11 @@ mod reader {
             markers: Vec<MarkerSpec>,
             #[serde(default)]
             ranges: Vec<RangeSpec>,
+            #[serde(default)]
+            calendar: Option<CalendarSpec>,
+        },
+        Calendar {
+            calendar: CalendarSpec,
         },
         Markers {
             markers: Vec<MarkerSpec>,
@@ -384,6 +405,7 @@ mod reader {
                         observed,
                         markers,
                         ranges,
+                        calendar,
                     } => {
                         let params = params
                             .into_iter()
@@ -412,6 +434,7 @@ mod reader {
                             observed: series_of(observed),
                             markers: markers.into_iter().map(Marker::from).collect(),
                             ranges: ranges.into_iter().map(TargetRange::from).collect(),
+                            calendar: calendar.map(Calendar::try_from).transpose()?,
                             generations: Vec::new(),
                             finished: false,
                             projections: Vec::new(),
@@ -428,6 +451,9 @@ mod reader {
                                 &mut log.markers,
                                 markers.into_iter().map(Marker::from).collect(),
                             ),
+                            Event::Calendar { calendar } => {
+                                log.calendar = Some(calendar.try_into()?)
+                            }
                             Event::Ranges { ranges } => merge_ranges(
                                 &mut log.ranges,
                                 ranges.into_iter().map(TargetRange::from).collect(),
