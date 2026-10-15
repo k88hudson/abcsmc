@@ -108,7 +108,7 @@ mod reader {
     use crate::marker::merge_markers;
     use crate::range::merge_ranges;
     use crate::{
-        Draw, GenerationStats, Marker, ParamMeta, ParamPrior, Params, Population, Series,
+        Adaptive, Draw, GenerationStats, Marker, ParamMeta, ParamPrior, Params, Population, Series,
         TargetRange, Value, resample_indices,
     };
 
@@ -124,6 +124,8 @@ mod reader {
         pub n_particles: usize,
         /// The quantile schedule, if the run's tolerances came from one.
         pub quantiles: Option<Vec<f64>>,
+        /// The adaptive schedule, if the run set its tolerances as it went.
+        pub adaptive: Option<Adaptive>,
         pub params: Vec<ParamMeta>,
         /// The distance's observed series; empty when it gave none.
         pub observed: Vec<Series>,
@@ -315,6 +317,8 @@ mod reader {
             n_particles: usize,
             #[serde(default)]
             quantiles: Option<Vec<f64>>,
+            #[serde(default)]
+            adaptive: Option<Adaptive>,
             params: Vec<ParamSpec>,
             #[serde(default)]
             observed: Option<SeriesListSpec>,
@@ -375,6 +379,7 @@ mod reader {
                         distance_description,
                         n_particles,
                         quantiles,
+                        adaptive,
                         params,
                         observed,
                         markers,
@@ -402,6 +407,7 @@ mod reader {
                             distance_description,
                             n_particles,
                             quantiles,
+                            adaptive,
                             params,
                             observed: series_of(observed),
                             markers: markers.into_iter().map(Marker::from).collect(),

@@ -14,8 +14,8 @@ use crate::marker::push_markers;
 use crate::platform::{Bar, Instant};
 use crate::range::push_ranges;
 use crate::{
-    CalibrationModel, Distance, Draw, Generation, Marker, ParamPrior, Params, Series, TargetRange,
-    Value,
+    Adaptive, CalibrationModel, Distance, Draw, Generation, Marker, ParamPrior, Params, Series,
+    TargetRange, Value,
 };
 
 /// What a run declares before its first generation.
@@ -30,6 +30,9 @@ pub struct RunMeta {
     pub n_generations: usize,
     /// The quantile schedule, when tolerances come from the prior's distances.
     pub quantiles: Option<Vec<f64>>,
+    /// The adaptive schedule, when each tolerance is set from the generation
+    /// before.
+    pub adaptive: Option<Adaptive>,
     pub params: Vec<ParamMeta>,
     /// The observed series the distance fits, if it exposes any.
     pub observed: Vec<Series>,
@@ -57,6 +60,7 @@ impl RunMeta {
         n_particles: usize,
         n_generations: usize,
         quantiles: Option<&[f64]>,
+        adaptive: Option<Adaptive>,
     ) -> Self {
         let priors = model.priors();
         let params = priors
@@ -77,6 +81,7 @@ impl RunMeta {
             n_particles,
             n_generations,
             quantiles: quantiles.map(<[f64]>::to_vec),
+            adaptive,
             params,
             observed: distance.observed_series(),
             markers: [distance.markers(), model.markers()].concat(),
@@ -257,7 +262,8 @@ impl<M: CalibrationModel> RunObserver<M> for StdoutObserver {
 ///
 /// - `run_started`: `version`, `id`, `description` and
 ///   `distance_description` (each a string or `null`), `n_particles`, `n_generations`,
-///   `quantiles` (or `null`), `params` (`[{name, kind, prior}]`, kind `real`
+///   `quantiles` (or `null`), `adaptive` (`{quantile, floor, min_acceptance,
+///   max_generations}` or `null`, see [`Adaptive`]), `params` (`[{name, kind, prior}]`, kind `real`
 ///   or `int`, prior a type-tagged document such as
 ///   `{"type":"Uniform","a":0.5,"b":3.0}`), `observed` (`[{name, values}]`,
 ///   the distance's observed series, name a string or `null`; empty when it
@@ -448,6 +454,19 @@ impl<M: CalibrationModel> RunObserver<M> for JsonlObserver {
             meta.n_particles, meta.n_generations
         ));
         push_opt_f64s(&mut line, meta.quantiles.as_deref());
+        line.push_str(r#","adaptive":"#);
+        match meta.adaptive {
+            Some(a) => {
+                line.push_str(r#"{"quantile":"#);
+                push_f64(&mut line, a.quantile);
+                line.push_str(r#","floor":"#);
+                push_f64(&mut line, a.floor);
+                line.push_str(r#","min_acceptance":"#);
+                push_f64(&mut line, a.min_acceptance);
+                line.push_str(&format!(r#","max_generations":{}}}"#, a.max_generations));
+            }
+            None => line.push_str("null"),
+        }
         line.push_str(r#","params":["#);
         for (i, param) in meta.params.iter().enumerate() {
             if i > 0 {

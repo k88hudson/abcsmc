@@ -190,13 +190,14 @@ where
     M: CalibrationModel + Sync,
     M::Output: Send + Sync,
 {
-    let mut sampler = Sampler::start_with_quantiles(
+    let mut sampler = Sampler::start_with_schedule(
         model,
         distance,
         n_particles,
         description,
         quantiles.len() + 1,
         Some(quantiles),
+        None,
         observer,
     );
     if let Some(prior) = sampler.next_generation(f64::INFINITY) {
@@ -204,6 +205,135 @@ where
         run_schedule(&mut sampler, &schedule);
     }
     sampler.finish()
+}
+
+/// A tolerance schedule set as the run goes: after a prior generation,
+/// each generation accepts up to the `quantile` of the previous generation's
+/// distances, never below `floor`. The run stops after the generation at the
+/// floor, after one that accepted less than `min_acceptance` of its
+/// proposals, when the tolerance would not fall, or after `max_generations`
+/// (the prior one included). For a distance whose scale is known (a sum of
+/// log ratios, say), where one floor serves every run of a kind but the
+/// generations it takes to get there, and whether it is reachable at all,
+/// differ from run to run. The quantile must be in (0, 1].
+#[derive(Clone, Copy, Debug, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+pub struct Adaptive {
+    pub quantile: f64,
+    pub floor: f64,
+    pub min_acceptance: f64,
+    pub max_generations: usize,
+}
+
+impl Adaptive {
+    /// The tolerance of the generation after one that ran at `tolerance`,
+    /// accepting `acceptance_ratio` of its proposals with these `distances`
+    /// (in any order), as the `completed`th generation; `None` when the run
+    /// stops there.
+    pub fn next_tolerance(
+        &self,
+        tolerance: f64,
+        acceptance_ratio: f64,
+        distances: impl Iterator<Item = f64>,
+        completed: usize,
+    ) -> Option<f64> {
+        if tolerance <= self.floor
+            || acceptance_ratio < self.min_acceptance
+            || completed >= self.max_generations
+        {
+            return None;
+        }
+        let mut distances: Vec<f64> = distances.collect();
+        distances.sort_by(|a, b| a.total_cmp(b));
+        let next = quantile_threshold(&distances, self.quantile).max(self.floor);
+        (next < tolerance).then_some(next)
+    }
+
+    fn after<M: CalibrationModel>(
+        &self,
+        generation: &Generation<M>,
+        completed: usize,
+    ) -> Option<f64> {
+        self.next_tolerance(
+            generation.stats.tolerance,
+            generation.stats.acceptance_ratio,
+            generation.particles.iter().map(|p| p.distance),
+            completed,
+        )
+    }
+}
+
+/// Run ABC-SMC under an [`Adaptive`] schedule: generation 0 is an
+/// unconstrained prior sample, and each later generation's tolerance is set
+/// from the one before it. Returns the generations run, at most
+/// `schedule.max_generations`.
+pub fn run_adaptive<M>(
+    model: &M,
+    distance: &(impl Distance<M::Output> + ?Sized),
+    schedule: Adaptive,
+    n_particles: usize,
+) -> Vec<Generation<M>>
+where
+    M: CalibrationModel + Sync,
+    M::Output: Send + Sync,
+{
+    run_adaptive_with(
+        model,
+        distance,
+        schedule,
+        n_particles,
+        "",
+        &StdoutObserver::new(),
+    )
+}
+
+/// [`run_adaptive`] reporting to `observer` instead of stdout, with a
+/// `description` of the run as in [`run_with`]. Observers are told
+/// `schedule.max_generations` generations are planned; the run may stop
+/// short.
+pub fn run_adaptive_with<M>(
+    model: &M,
+    distance: &(impl Distance<M::Output> + ?Sized),
+    schedule: Adaptive,
+    n_particles: usize,
+    description: &str,
+    observer: &impl RunObserver<M>,
+) -> Vec<Generation<M>>
+where
+    M: CalibrationModel + Sync,
+    M::Output: Send + Sync,
+{
+    let mut sampler = Sampler::start_with_schedule(
+        model,
+        distance,
+        n_particles,
+        description,
+        schedule.max_generations,
+        None,
+        Some(schedule),
+        observer,
+    );
+    run_adaptively(&mut sampler, schedule, f64::INFINITY);
+    sampler.finish()
+}
+
+/// Runs generations from `tolerance` on, each tolerance set by `schedule`
+/// from the generation before, until the schedule stops or a generation
+/// cannot be filled.
+fn run_adaptively<M, D, O>(sampler: &mut Sampler<'_, M, D, O>, schedule: Adaptive, tolerance: f64)
+where
+    M: CalibrationModel + Sync,
+    M::Output: Send + Sync,
+    D: Distance<M::Output> + ?Sized,
+    O: RunObserver<M>,
+{
+    let mut tolerance = Some(tolerance);
+    while let Some(next) = tolerance {
+        let completed = sampler.completed() + 1;
+        tolerance = sampler
+            .next_generation(next)
+            .and_then(|generation| schedule.after(generation, completed));
+    }
 }
 
 /// The tolerance of every generation of a quantile run: infinite for
@@ -258,6 +388,7 @@ fn check_same_model<M: CalibrationModel>(model: &M, log: &RunLog) -> std::io::Re
 /// A sampler placed after the last generation `log` completed, or at the
 /// start of a new run if it completed none.
 #[cfg(feature = "serde")]
+#[allow(clippy::too_many_arguments)]
 fn sampler_after<'a, M, D, O>(
     model: &'a M,
     distance: &'a D,
@@ -265,6 +396,7 @@ fn sampler_after<'a, M, D, O>(
     description: &str,
     n_generations: usize,
     quantiles: Option<&[f64]>,
+    adaptive: Option<Adaptive>,
     observer: &'a O,
 ) -> std::io::Result<Sampler<'a, M, D, O>>
 where
@@ -275,13 +407,14 @@ where
 {
     check_same_model(model, log)?;
     let Some(last) = log.generations.last() else {
-        return Ok(Sampler::start_with_quantiles(
+        return Ok(Sampler::start_with_schedule(
             model,
             distance,
             log.n_particles,
             description,
             n_generations,
             quantiles,
+            adaptive,
             observer,
         ));
     };
@@ -293,7 +426,7 @@ where
             log.n_particles
         )));
     }
-    Ok(Sampler::resume_with_quantiles(
+    Ok(Sampler::resume_with_schedule(
         model,
         distance,
         last.population(),
@@ -301,6 +434,7 @@ where
         description,
         n_generations,
         quantiles,
+        adaptive,
         observer,
     ))
 }
@@ -379,6 +513,62 @@ where
     )
 }
 
+/// Continues the [`run_adaptive_with`] run recorded in `log`, as
+/// [`resume_with`] does, under the same `schedule`: the tolerances the log's
+/// generations ran at must be the ones the schedule sets from the
+/// generations before them.
+#[cfg(feature = "serde")]
+pub fn resume_adaptive_with<M>(
+    model: &M,
+    distance: &(impl Distance<M::Output> + ?Sized),
+    schedule: Adaptive,
+    log: &RunLog,
+    description: &str,
+    observer: &impl RunObserver<M>,
+) -> std::io::Result<Vec<Generation<M>>>
+where
+    M: CalibrationModel + Sync,
+    M::Output: Send + Sync,
+{
+    let mut expected = Some(f64::INFINITY);
+    for (completed, logged) in log.generations.iter().enumerate() {
+        let Some(tolerance) = expected else {
+            return Err(invalid(format!(
+                "the schedule stops before generation {}",
+                logged.stats.generation
+            )));
+        };
+        if logged.stats.tolerance != tolerance {
+            return Err(invalid(format!(
+                "generation {} ran at tolerance {} but the schedule gives it {tolerance}",
+                logged.stats.generation, logged.stats.tolerance
+            )));
+        }
+        expected = schedule.next_tolerance(
+            logged.stats.tolerance,
+            logged.stats.acceptance_ratio,
+            logged.particles.iter().map(|p| p.distance),
+            completed + 1,
+        );
+    }
+    let Some(tolerance) = expected else {
+        check_same_model(model, log)?;
+        return Ok(Vec::new());
+    };
+    let mut sampler = sampler_after(
+        model,
+        distance,
+        log,
+        description,
+        schedule.max_generations,
+        None,
+        Some(schedule),
+        observer,
+    )?;
+    run_adaptively(&mut sampler, schedule, tolerance);
+    Ok(sampler.finish())
+}
+
 #[cfg(feature = "serde")]
 fn resume_schedule<M>(
     model: &M,
@@ -412,6 +602,7 @@ where
         description,
         schedule.len(),
         quantiles,
+        None,
         observer,
     )?;
     run_schedule(&mut sampler, schedule);

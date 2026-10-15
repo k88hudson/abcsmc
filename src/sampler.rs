@@ -7,8 +7,8 @@ use rand::{Rng, SeedableRng, rngs::StdRng};
 
 use crate::platform::Instant;
 use crate::{
-    CalibrationModel, Distance, Generation, GenerationStats, Params, PerturbationKernel, RunMeta,
-    RunObserver, VarianceAdapter, get_ess, get_perplexity, initialize, step_from,
+    Adaptive, CalibrationModel, Distance, Generation, GenerationStats, Params, PerturbationKernel,
+    RunMeta, RunObserver, VarianceAdapter, get_ess, get_perplexity, initialize, step_from,
 };
 
 /// The part of a completed generation that the next one proposes from.
@@ -100,24 +100,27 @@ where
         n_generations: usize,
         observer: &'a O,
     ) -> Self {
-        Self::start_with_quantiles(
+        Self::start_with_schedule(
             model,
             distance,
             n_particles,
             description,
             n_generations,
             None,
+            None,
             observer,
         )
     }
 
-    pub(crate) fn start_with_quantiles(
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn start_with_schedule(
         model: &'a M,
         distance: &'a D,
         n_particles: usize,
         description: &str,
         n_generations: usize,
         quantiles: Option<&[f64]>,
+        adaptive: Option<Adaptive>,
         observer: &'a O,
     ) -> Self {
         let meta = RunMeta::new(
@@ -127,6 +130,7 @@ where
             n_particles,
             n_generations,
             quantiles,
+            adaptive,
         );
         observer.run_started(model, &meta);
         Self::new(model, distance, n_particles, None, 0, observer)
@@ -146,7 +150,7 @@ where
         n_generations: usize,
         observer: &'a O,
     ) -> Self {
-        Self::resume_with_quantiles(
+        Self::resume_with_schedule(
             model,
             distance,
             population,
@@ -154,12 +158,13 @@ where
             description,
             n_generations,
             None,
+            None,
             observer,
         )
     }
 
     #[allow(clippy::too_many_arguments)]
-    pub(crate) fn resume_with_quantiles(
+    pub(crate) fn resume_with_schedule(
         model: &'a M,
         distance: &'a D,
         population: Population,
@@ -167,6 +172,7 @@ where
         description: &str,
         n_generations: usize,
         quantiles: Option<&[f64]>,
+        adaptive: Option<Adaptive>,
         observer: &'a O,
     ) -> Self {
         assert!(completed > 0, "a run with no completed generation starts");
@@ -184,6 +190,7 @@ where
             n_particles,
             n_generations,
             quantiles,
+            adaptive,
         );
         observer.run_resumed(model, &meta, completed);
         Self::new(
